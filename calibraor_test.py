@@ -39,15 +39,15 @@ DEFAULT_SERIAL_PORTS: Sequence[str] = (
 CALIBRATION_MODE_FAST = "fast"
 CALIBRATION_MODE_DEBUG = "debug"
 
-# Fast mode: optimized for production throughput
+# Fast mode: optimized for production throughput (timeouts tuned for 115200 baud)
 FAST_MODE_SAMPLES = 2
 FAST_MODE_DISCARD = 0
-FAST_MODE_TIMEOUT_PER_SAMPLE_S = 1.0
+FAST_MODE_TIMEOUT_PER_SAMPLE_S = 2.0
 
 # Debug mode: more samples for detailed analysis
 DEBUG_MODE_SAMPLES = 3
 DEBUG_MODE_DISCARD = 1
-DEBUG_MODE_TIMEOUT_PER_SAMPLE_S = 3.0
+DEBUG_MODE_TIMEOUT_PER_SAMPLE_S = 6.0
 
 
 def open_first_available_serial(ports: Sequence[str]) -> Optional[Serial]:
@@ -57,8 +57,8 @@ def open_first_available_serial(ports: Sequence[str]) -> Optional[Serial]:
         ser = bolt_control.open_serial(dev)
         if ser:
             print(" OK")
-            # Allow some time for the Bolt to finish any boot messages.
-            time.sleep(1.0)
+            # Allow some time for the Bolt to finish any boot messages (2s for 115200 baud).
+            time.sleep(2.0)
             bolt_control.clear_serial_buffer(ser)
             return ser
         print(" failed")
@@ -71,7 +71,7 @@ def _log_step(title: str) -> None:
     print("=" * 60)
 
 
-def _read_probe_temperature_once(ser: Serial, timeout_s: float = 1.0) -> Optional[float]:
+def _read_probe_temperature_once(ser: Serial, timeout_s: float = 2.0) -> Optional[float]:
     """
     Trigger `etc_adc sample` and parse the 'Probe sensor temperature: <val>' line.
     
@@ -112,16 +112,16 @@ def _probe_temperature_average(
     ser: Serial,
     samples: int = 2,
     discard: int = 0,
-    timeout_per_sample_s: float = 1.0,
+    timeout_per_sample_s: float = 2.0,
 ) -> Optional[float]:
     """
     Average a few 'Probe sensor temperature' readings from etc_adc sample.
-    
+
     Args:
         ser: Serial port connection
         samples: Number of samples to average (default: 2 for fast mode)
         discard: Number of initial samples to discard (default: 0 for fast mode)
-        timeout_per_sample_s: Timeout per sample in seconds (default: 1.0 for fast mode)
+        timeout_per_sample_s: Timeout per sample in seconds (default: 2.0 for 115200 baud)
     
     Returns:
         Average temperature in Celsius, or None if sampling failed

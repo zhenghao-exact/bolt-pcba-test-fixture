@@ -469,12 +469,13 @@ class BoltTest:
             return False
         
         print("Analog cal: setting Rr value for ADC compensation...")
+        time.sleep(2.0)
         if not bolt_control.send_shell_command(self.ser, "etc_adc_comp rr_set"):
             print("Analog cal: failed to send etc_adc_comp rr_set command")
             return False
         
-        # Read response and check for success
-        end_time = time.time() + 3.0
+        # Read response and check for success (8s for 115200 baud - device may reboot)
+        end_time = time.time() + 8.0
         saw_success = False
         while time.time() < end_time:
             line = self.ser.readline().decode(errors="ignore").strip()

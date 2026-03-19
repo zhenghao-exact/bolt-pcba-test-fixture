@@ -138,7 +138,7 @@ def _read_lines_until(ser: Serial, timeout_s: float) -> List[str]:
     return lines
 
 
-def adc_sample_raw_once(ser: Serial, timeout_s: float = 1.5) -> Optional[int]:
+def adc_sample_raw_once(ser: Serial, timeout_s: float = 3.0) -> Optional[int]:
     """
     Trigger a single raw ADC sample on the Bolt and parse the returned value.
 
@@ -171,7 +171,7 @@ def adc_sample_raw_average(
     ser: Serial,
     samples: int = 10,
     discard: int = 2,
-    timeout_per_sample_s: float = 1.5,
+    timeout_per_sample_s: float = 3.0,
 ) -> Optional[float]:
     """
     Take multiple raw ADC samples and return the average of the last `samples`
@@ -194,7 +194,7 @@ def adc_sample_raw_average(
     return sum(values) / float(len(values))
 
 
-def adc_sample_calibrated_once(ser: Serial, timeout_s: float = 2.0) -> Optional[float]:
+def adc_sample_calibrated_once(ser: Serial, timeout_s: float = 4.0) -> Optional[float]:
     """
     Trigger a single calibrated ADC sample on the Bolt and parse the
     temperature in degrees Celsius from the `etc_adc sample` shell command.
@@ -232,7 +232,7 @@ def adc_sample_calibrated_average(
     ser: Serial,
     samples: int = 3,
     discard: int = 1,
-    timeout_per_sample_s: float = 2.0,
+    timeout_per_sample_s: float = 4.0,
 ) -> Optional[float]:
     """
     Take multiple calibrated ADC samples and return the average calibrated
@@ -264,7 +264,7 @@ def _write_adc_param(ser: Serial, subcmd: str, value: float, scope: str = "facto
     if not send_shell_command(ser, cmd):
         return False
 
-    end_time = time.time() + 2.0
+    end_time = time.time() + 4.0
     saw_ok = False
     while time.time() < end_time:
         line = ser.readline().decode(errors="ignore").strip()
