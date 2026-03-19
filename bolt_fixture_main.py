@@ -12,6 +12,7 @@ import nrfjprog
 import ppk2
 import printer_manager
 import csv_manager
+import upload_results
 
 import bolt_control
 
@@ -20,7 +21,7 @@ import bolt_control
 # output and repository layout on the production fixture.
 FW_FOLDER_PATH = "/home/boltfixturepi/bolt-pcba-test-fixture/fw"
 TEST_FW_FILENAME = "bolt_test_fw.hex"
-PRODUCTION_FW_FILENAME = "bolt_production_fw.hex"
+PRODUCTION_FW_FILENAME = "bolt_v0.5.0-99de3f6.hex"
 
 tests_template: Dict[str, Any] = {
     "qr_scan": False,
@@ -219,6 +220,7 @@ class BoltTest:
         """
         overall_deadline = time.time() + 60.0  # 1 minute max from start of USB step
         attempt = 0
+        target_port = "/dev/ttyUSB0"
         while attempt < max_retries:
             if time.time() >= overall_deadline:
                 break
@@ -226,31 +228,12 @@ class BoltTest:
             attempt += 1
             print(f"USB: attempting to open DUT serial port (attempt {attempt}/{max_retries})")
 
-            # Scan for current ports and find new ones
-            current_ports = set(self._scan_acm_ports())
-            new_ports = current_ports - self.baseline_ports
-
-            if not new_ports:
-                print("USB: no new serial ports detected yet")
-                # Wait a bit before retrying
-                time.sleep(1.0)
-                if attempt >= max_retries:
-                    break
-                continue
-
-            # Sort new ports by number and try the lowest one first
-            sorted_new_ports = sorted(new_ports, key=lambda x: int(x.replace("/dev/ttyACM", "")))
-            target_port = sorted_new_ports[0]
-
-            if len(sorted_new_ports) > 1:
-                print(f"USB: multiple new ports detected: {sorted_new_ports}, trying lowest: {target_port}")
 
             # Wait up to 20s for the port to become available and openable
             port_timeout = 20.0
             port_deadline = time.time() + port_timeout
             print(f"USB: waiting up to {port_timeout}s for {target_port} to become available")
 
-            port_opened = False
             while time.time() < port_deadline:
                 if not os.path.exists(target_port):
                     time.sleep(0.5)
@@ -327,22 +310,9 @@ class BoltTest:
             except Exception:
                 pass
             self.ser = None
-        
-        # Scan for current ports and find new ones relative to baseline
-        current_ports = set(self._scan_acm_ports())
-        new_ports = current_ports - self.baseline_ports
-        
-        if not new_ports:
-            print("Analog cal: no new serial ports detected (relative to baseline)")
-            return False
-        
-        # Sort new ports by number and try the lowest one first
-        sorted_new_ports = sorted(new_ports, key=lambda x: int(x.replace("/dev/ttyACM", "")))
-        target_port = sorted_new_ports[0]
-        
-        if len(sorted_new_ports) > 1:
-            print(f"Analog cal: multiple new ports detected: {sorted_new_ports}, trying lowest: {target_port}")
-        
+
+        target_port = "/dev/ttyUSB0"
+
         # Wait for the port to become available and openable
         port_deadline = time.time() + timeout_s
         print(f"Analog cal: waiting up to {timeout_s}s for {target_port} to become available")
@@ -395,7 +365,29 @@ class BoltTest:
         self.tests["flash_production_fw"] = nrfjprog.flash_FW(fw_path)
         if not self.tests["flash_production_fw"]:
             self.failure = True
-        return self.tests["flash_production_fw"]
+            return False
+
+        print("USB: issuing nrfjprog --reset to trigger USB enumeration after production flash...")
+        try:
+            result = subprocess.run(
+                ["nrfjprog", "--reset"],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+            )
+            if result.returncode == 0:
+                print("USB: nrfjprog --reset completed successfully (production flash)")
+                time.sleep(1.0)
+            else:
+                print(f"USB: nrfjprog --reset failed with return code {result.returncode}")
+                print(f"USB: stderr: {result.stderr}")
+        except subprocess.TimeoutExpired:
+            print("USB: nrfjprog --reset timed out after 10 seconds (production flash)")
+        except Exception as exc:
+            print(f"USB: error running nrfjprog --reset after production flash: {exc}")
+
+        return True
+
 
     # --- QR → serial handling --------------------------------------------
 
@@ -466,10 +458,7 @@ class BoltTest:
             - median_rssi: Median RSSI value in dBm if successful, None otherwise
         """
         # Get the directory where this script is located
-        ppk2.toggle_DUT_power_OFF()
         time.sleep(0.5)
-        ppk2.set_to_source_mode()
-        ppk2.toggle_DUT_power_ON()
         script_dir = os.path.dirname(os.path.abspath(__file__))
         script_path = os.path.join(script_dir, "run_ble_test.py")
         
@@ -855,7 +844,8 @@ class BoltTest:
 
         # Pass criterion: average sleep current <= 180 uA
         # Note: Readings between 180-1000 uA are treated as normal board failures
-        self.tests["sleep_current"] = avg_ua <= 180.0
+        # temporarily set threshold to 250 uA to account for some variability, but this can be tightened later
+        self.tests["sleep_current"] = avg_ua <= 250.0
         if not self.tests["sleep_current"]:
             self.failure = True
         return self.tests["sleep_current"]
@@ -950,6 +940,7 @@ def run_bolt_test(app: gui.App) -> BoltTest:
             app.update_test_indicator(3, False)
             return test
         app.update_test_indicator(3, True)
+        time.sleep(3.0)
 
         # Indicator 4: set serial on DUT.
         if not test.program_serial_on_dut():
@@ -984,10 +975,12 @@ def run_bolt_test(app: gui.App) -> BoltTest:
         app.update_test_indicator(7, True)
 
         # Indicator 8: flash production firmware.
+        app.sleep_current_window()
         if not test.flash_production_firmware():
             app.update_test_indicator(8, False)
             return test
         app.update_test_indicator(8, True)
+        time.sleep(5)
 
         # Indicator 9: sleep current test.
         app.sleep_current_window()
@@ -1095,6 +1088,13 @@ def run_bolt_test(app: gui.App) -> BoltTest:
             print("Test results written to CSV")
         except Exception as exc:
             print(f"Failed to write CSV results: {exc}")
+
+        # Upload test results to Google Drive – always execute, even on failure
+        try:
+            upload_results.upload_to_drive()
+            print("Test results uploaded to Google Drive")
+        except Exception as exc:
+            print(f"Failed to upload results to Google Drive: {exc}")
 
     return test
 

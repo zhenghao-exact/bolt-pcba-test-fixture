@@ -6,17 +6,16 @@ from googleapiclient.http import MediaIoBaseDownload
 import io
 import datetime
 import json
-import main
 
 SCOPES = ['https://www.googleapis.com/auth/drive.file',
     'https://www.googleapis.com/auth/drive',
     'https://www.googleapis.com/auth/drive.metadata',
     'https://www.googleapis.com/auth/spreadsheets']
 
-# TEAM_DRIVE_ID = '0AHfLcRSZ2qDHUk9PVA'
-# TEST_RESULTS_FOLDER_ID = '1WOJNzdR4okeNV8mQODa4qVa8G1uv8bH6'
-# FIRMWARE_FOLDER_ID = '1dZ-8Bktjfxu0VR8OQec4otjoLFYEcoAc'
-# PRODUCTION_FOLDER_PATH = "/home/fixturepi2/Documents/etc-monitor-fixture/fw/hexfiles/"            # Path to production FW folder
+TEAM_DRIVE_ID = '0AHfLcRSZ2qDHUk9PVA'
+TEST_RESULTS_FOLDER_ID = '1WOJNzdR4okeNV8mQODa4qVa8G1uv8bH6'
+# FIRMWARE_FOLDER_ID = '1lQRLi2DC8lDLPJ-NyCJVzz-7HJC1iPIT'
+# PRODUCTION_FOLDER_PATH = "/home/yu/git/exact/bolt-pcba-test-fixture/bolt-pcba-test-fixture/fw"            # Path to production FW folder
 
 #change directory to working directory
 abspath = os.path.abspath(__file__)
@@ -28,7 +27,8 @@ KEY_FILE = os.getcwd() + '/fixture-test-results-689646566465.json'
 # New file is created each fiscal year
 create_new_drive_file = False
 
-fixture_id = main.get_fixture_id()
+# Bolt fixture ID is always 1
+fixture_id = 1
 
 # Current FW version
 latest_fw_version = ""
@@ -42,7 +42,7 @@ month = date.month
 if date.month > 6:
     year = year + 1
     
-local_results_filepath = os.getcwd() + '/' + str(year) + ".csv"
+local_results_filepath = f"/home/boltfixturepi/Documents/bolt-pcba-test-fixture/{year}.csv"
 
 # Open json file and get last year and drive file id
 with open("fixture_config.json", "r") as json_file:
@@ -73,7 +73,7 @@ def authenticate():
 def create_new_sheet_on_drive(sheets_service, drive_service):
     
     file_metadata = {
-        'name' : f"Test Fixture {fixture_id} Results {year}",
+        'name' : f"Bolt PCBA Test Fixture {fixture_id} Results {year}",
         'mimeType' : 'application/vnd.google-apps.spreadsheet',
         'parents': [TEST_RESULTS_FOLDER_ID],  # Specify the folder ID within the shared drive
         'driveId': TEAM_DRIVE_ID,  # Specify the shared drive ID
@@ -103,11 +103,14 @@ if int(year) != int(json_data["fixtures"][fixture_id-1]["year"]):
     sheet_service, drive_service = authenticate()
     create_new_sheet_on_drive(sheet_service, drive_service)
     
-# Get current FW version from JSON file
-with open("device_fw.json", "r") as json_file:
-    data = json.load(json_file)
-
-latest_fw_version = data["version"]
+# Get current FW version from JSON file (optional - only needed for firmware checking)
+try:
+    with open("device_fw.json", "r") as json_file:
+        data = json.load(json_file)
+    latest_fw_version = data["version"]
+except FileNotFoundError:
+    # Bolt doesn't use firmware checking, so this file is optional
+    latest_fw_version = ""
 
 def update_sheet_on_drive(sheets_service, sheet_id):
     # Read CSV content

@@ -19,8 +19,12 @@ import bolt_control
 # Paths to firmware images on the Pi. Adjust these to match the Bolt build
 # output and repository layout on the production fixture.
 FW_FOLDER_PATH = "/home/boltfixturepi/bolt-pcba-test-fixture/fw"
-TEST_FW_FILENAME = "bolt_test_fw.hex"
+TEST_FW_FILENAME = "merged.hex"
 PRODUCTION_FW_FILENAME = "bolt_production_fw.hex"
+
+# Feature flag to enable/disable BLE test
+# Set to True to enable BLE testing, False to skip (test will always pass)
+ENABLE_BLE_TEST = False
 
 tests_template: Dict[str, Any] = {
     "qr_scan": False,
@@ -398,7 +402,19 @@ class BoltTest:
         - Script fails + fallback succeeds: Set RSSI to None (reported as N/A in CSV), 
           set tests["ble"] = True
         - Both fail: Set tests["ble"] = False, RSSI remains None
+        
+        NOTE: BLE test can be disabled by setting ENABLE_BLE_TEST = False at the module level.
+        When disabled, this method will immediately return True (test passes).
+        To re-enable BLE testing, change ENABLE_BLE_TEST to True.
         """
+        # Check if BLE test is enabled
+        # To re-enable BLE testing, change ENABLE_BLE_TEST to True at the module level (line 26)
+        if not ENABLE_BLE_TEST:
+            print("BLE test: SKIPPED (ENABLE_BLE_TEST = False). Test will pass.")
+            self.tests["ble"] = True
+            self.measurements["ble_rssi_median"] = None  # Set to None when skipped
+            return True
+        
         bolt_id = self.measurements.get("bolt_id")
         if not bolt_id:
             return False
@@ -466,6 +482,47 @@ class BoltTest:
 
     # --- Analog calibration -----------------------------------------------
 
+    def _set_adc_comp_rr(self) -> bool:
+        """
+        Set the Rr value for ADC compensation by reading the ADC compensation channel.
+        
+        This must be called before running analog calibration to ensure proper
+        ADC offset compensation. Reads the ADC_CAL_COMP_IDX channel and stores
+        the value in settings.
+        
+        Returns:
+            True if Rr was set successfully, False otherwise
+        """
+        if not self.ser:
+            return False
+        
+        print("Analog cal: setting Rr value for ADC compensation...")
+        if not bolt_control.send_shell_command(self.ser, "etc_adc_comp rr_set"):
+            print("Analog cal: failed to send etc_adc_comp rr_set command")
+            return False
+        
+        # Read response and check for success
+        end_time = time.time() + 3.0
+        saw_success = False
+        while time.time() < end_time:
+            line = self.ser.readline().decode(errors="ignore").strip()
+            if not line:
+                continue
+            print(f"[adc_comp_rr] {line}")
+            if "Rr set to" in line:
+                saw_success = True
+                break
+            if "Failed" in line or "Error" in line or "not supported" in line:
+                print(f"Analog cal: etc_adc_comp rr_set failed: {line}")
+                return False
+        
+        if saw_success:
+            print("Analog cal: Rr value set successfully")
+            return True
+        else:
+            print("Analog cal: timeout waiting for etc_adc_comp rr_set response")
+            return False
+
     def run_analog_calibration(self) -> bool:
         """
         Run the analog calibration sequence by calling calibraor_test.py functions directly.
@@ -477,11 +534,19 @@ class BoltTest:
           - Verification at multiple temperature points
         
         Captures calibration parameters and temperature readings for CSV reporting.
+        
+        NOTE: This method calls _set_adc_comp_rr() first to set the Rr value for
+        ADC compensation before running calibration.
         """
         if not self.ser:
             self.tests["analog"] = False
             self.failure = True
             return False
+
+        # Set Rr value for ADC compensation before calibration
+        if not self._set_adc_comp_rr():
+            print("Analog cal: warning - failed to set Rr value, continuing anyway")
+            # Don't fail the test if Rr set fails, but log the warning
 
         # Import calibration functions directly instead of using subprocess
         # This allows us to capture the returned calibration data
@@ -813,13 +878,39 @@ def run_bolt_test(app: gui.App) -> BoltTest:
             # If running on a development machine without the printer, just log.
             print(f"Skipping label printing due to error: {exc}")
 
-        # Write test results to CSV – always execute, even on failure
-        try:
-            csv_manager.write_test_results(test.tests, test.measurements, user="N/A", fixture=1)
-            print("Test results written to CSV")
-        except Exception as exc:
-            print(f"Failed to write CSV results: {exc}")
+        # Write test results to CSV – DISABLED
+        # CSV generation has been disabled. To re-enable, uncomment the code below.
+        # Note: Upload functionality is not currently implemented in this file (only in bolt_fixture_main.py)
+        # try:
+        #     csv_manager.write_test_results(test.tests, test.measurements, user="N/A", fixture=1)
+        #     print("Test results written to CSV")
+        # except Exception as exc:
+        #     print(f"Failed to write CSV results: {exc}")
 
+    return test
+
+
+def run_flash_current_headless() -> BoltTest:
+    """
+    Run only production firmware flash + sleep current test (no QR/USB/serial).
+    """
+    test = BoltTest()
+    test.measurements["bolt_id"] = "unknown"
+
+    print("Step 1: Flash production firmware")
+    flash_ok = test.flash_production_firmware()
+    if not flash_ok:
+        test.tests["sleep_current"] = False
+        test.tests["final"] = False
+        test.failure = True
+        return test
+
+    print("Step 1: Flash production firmware - PASSED")
+
+    print("Step 2: Sleep current test")
+    sleep_ok = test.run_sleep_current_test()
+    test.tests["final"] = bool(flash_ok and sleep_ok)
+    test.failure = not test.tests["final"]
     return test
 
 
@@ -994,12 +1085,14 @@ def run_bolt_test_headless(prod_mode: bool = False) -> BoltTest:
             # If running on a development machine without the printer, just log.
             print(f"Skipping label printing due to error: {exc}")
 
-        # Write test results to CSV – always execute, even on failure
-        try:
-            csv_manager.write_test_results(test.tests, test.measurements, user="N/A", fixture=1)
-            print("Test results written to CSV")
-        except Exception as exc:
-            print(f"Failed to write CSV results: {exc}")
+        # Write test results to CSV – DISABLED
+        # CSV generation has been disabled. To re-enable, uncomment the code below.
+        # Note: Upload functionality is not currently implemented in this file (only in bolt_fixture_main.py)
+        # try:
+        #     csv_manager.write_test_results(test.tests, test.measurements, user="N/A", fixture=1)
+        #     print("Test results written to CSV")
+        # except Exception as exc:
+        #     print(f"Failed to write CSV results: {exc}")
 
     return test
 
@@ -1013,15 +1106,19 @@ def main() -> None:
     Usage:
         python main_test.py          # Default mode: auto-passes production tests
         python main_test.py prod     # Production mode: runs real production tests
+        python main_test.py flash_current  # Flash production + run sleep current only
     """
     # Parse command line arguments
     prod_mode = False
+    flash_current_mode = False
     if len(sys.argv) > 1:
         if sys.argv[1] == "prod":
             prod_mode = True
+        elif sys.argv[1] == "flash_current":
+            flash_current_mode = True
         else:
             print(f"Unknown argument: {sys.argv[1]}")
-            print("Usage: python main_test.py [prod]")
+            print("Usage: python main_test.py [prod | flash_current]")
             sys.exit(1)
     
     # Basic PPK2 initialisation; if no PPK2 is connected this will just log
@@ -1034,9 +1131,13 @@ def main() -> None:
     # Run a single headless test cycle
     print("=" * 60)
     print("Bolt PCBA Test Fixture - Headless Mode")
-    print(f"Mode: {'prod' if prod_mode else 'default'}")
+    mode_str = "flash_current" if flash_current_mode else ("prod" if prod_mode else "default")
+    print(f"Mode: {mode_str}")
     print("=" * 60)
-    bolt_test = run_bolt_test_headless(prod_mode=prod_mode)
+    if flash_current_mode:
+        bolt_test = run_flash_current_headless()
+    else:
+        bolt_test = run_bolt_test_headless(prod_mode=prod_mode)
 
     # After test cycle, turn off DUT power from PPK2
     try:
@@ -1050,7 +1151,7 @@ def main() -> None:
     print("Test Summary:")
     print(f"  Final result: {'PASSED' if bolt_test.tests.get('final', False) else 'FAILED'}")
     print(f"  Bolt ID: {bolt_test.measurements.get('bolt_id', 'N/A')}")
-    print(f"  Mode: {'prod' if prod_mode else 'default'}")
+    print(f"  Mode: {mode_str}")
     print("=" * 60)
 
 

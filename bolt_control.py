@@ -12,7 +12,7 @@ except ImportError:
     AdvertisementData = None  # type: ignore
 import asyncio
 
-BAUDRATE = 230400
+BAUDRATE = 115200
 BLE_CHAR_UUID = "4a7b9d11-2235-47ae-b2c1-1559361c6a95"
 
 
