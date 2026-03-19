@@ -16,11 +16,11 @@ import csv_manager
 import bolt_control
 
 
-# Paths to firmware images on the Pi. Adjust these to match the Bolt build
-# output and repository layout on the production fixture.
+# Paths to firmware images on the Pi. Must match bolt_fixture_main.py so flash
+# works identically in both GUI and headless modes.
 FW_FOLDER_PATH = "/home/boltfixturepi/bolt-pcba-test-fixture/fw"
-TEST_FW_FILENAME = "merged.hex"
-PRODUCTION_FW_FILENAME = "bolt_production_fw.hex"
+TEST_FW_FILENAME = "bolt_test_fw.hex"
+PRODUCTION_FW_FILENAME = "bolt_v0.5.0-99de3f6.hex"
 
 # Feature flag to enable/disable BLE test
 # Set to True to enable BLE testing, False to skip (test will always pass)
