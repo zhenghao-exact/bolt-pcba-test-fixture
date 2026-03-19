@@ -303,41 +303,53 @@ class App(Tk):
     def scan_pcba_barcode_window(self):
         self.pcba_barcode.set(value="")
         self.pcba_barcode_scan_var.set(0)
+        scan_confirm_var = IntVar(value=0)
         scan_pcba_barcode_popup = Toplevel(padx=20, pady=20)
         scan_pcba_barcode_popup.protocol("WM_DELETE_WINDOW", self.disable_event)
-        
-        ## 1 == scanned
+
+        def expand_short_bolt_id(raw: str) -> str:
+            """Expand short numeric input (e.g. '181') to full format 'Bolt_30000181'."""
+            s = raw.strip()
+            if not s:
+                return s
+            if s.isdigit() and 1 <= len(s) <= 3:
+                return f"Bolt_30000{s.zfill(3)}"
+            return s
+
+        def confirm_barcode():
+            raw = self.pcba_barcode.get().strip()
+            if raw:
+                expanded = expand_short_bolt_id(raw)
+                self.pcba_barcode.set(expanded)
+                scan_confirm_var.set(1)
+                scan_pcba_barcode_popup.destroy()
+
         def skip_barcode_scan():
             self.pcba_barcode_scan_var.set(1)
             self.pcba_barcode.set(value="")
+            scan_confirm_var.set(2)
             scan_pcba_barcode_popup.destroy()
-            return
-               
+
         scan_pcba_barcode_popup.title("PCBA Barcode Scan")
-        
-        msg_str = "Please scan the Bolt QR / PCB serial label"
-        
+
+        msg_str = "Please scan the Bolt QR / PCB serial label, or type manually, then click OK"
+
         ask_to_scan_msg = ttk.Label(scan_pcba_barcode_popup, text=msg_str)
         ask_to_scan_msg.config(font=("TkFixedFont", 16))
-        skip_button = ttk.Button(scan_pcba_barcode_popup, text="SKIP", command=skip_barcode_scan)
         barcode_entry = ttk.Entry(scan_pcba_barcode_popup, textvariable=self.pcba_barcode)
-        
+        ok_button = ttk.Button(scan_pcba_barcode_popup, text="OK", command=confirm_barcode)
+        skip_button = ttk.Button(scan_pcba_barcode_popup, text="SKIP", command=skip_barcode_scan)
+
+        barcode_entry.bind("<Return>", lambda e: confirm_barcode())
+
         ask_to_scan_msg.grid(column=0, row=0, columnspan=2)
-        barcode_entry.grid(column=0, row=1, padx=10, pady=10)
-        skip_button.grid(column=0, row=2, padx=10, pady=10)
-        
+        barcode_entry.grid(column=0, row=1, columnspan=2, padx=10, pady=10)
+        ok_button.grid(column=0, row=2, padx=10, pady=10)
+        skip_button.grid(column=1, row=2, padx=10, pady=10)
+
         barcode_entry.focus()
-        
-        barcode_scanned = False
-        while not barcode_scanned:
-            scan_pcba_barcode_popup.update()
-            if self.pcba_barcode.get() != "" or self.pcba_barcode_scan_var.get() == 1:
-                time.sleep(0.3)
-                scan_pcba_barcode_popup.update()
-                self.pcba_barcode.get()
-                barcode_scanned = True
-                
-        scan_pcba_barcode_popup.destroy()
+
+        self.wait_variable(scan_confirm_var)
         return
 
 
