@@ -79,11 +79,13 @@ def send_shell_command(ser: Serial, cmd: str) -> bool:
     Send a Zephyr shell command and return True if the write succeeded.
 
     The caller is responsible for reading / parsing the response.
+    Uses flush to ensure the command is fully transmitted before returning.
     """
     try:
         if not cmd.endswith("\n"):
             cmd = cmd + "\n"
         ser.write(cmd.encode())
+        ser.flushOutput()
         return True
     except (SerialException, OSError, IOError) as exc:
         print(f"[serial] Failed to send command '{cmd.strip()}': {exc}")
@@ -349,10 +351,14 @@ def set_pcba_serial(ser: Serial, bolt_id: str) -> bool:
         print(f"Invalid Bolt ID for serial write: {bolt_id}")
         return False
 
+    time.sleep(2.0)
+
     # Match the manual minicom usage exactly: leading newline, command, newline.
     cmd = f"\nsettings write sn/id {le_hex}\n"
     try:
         ser.write(cmd.encode())
+        ser.flushOutput()
+        time.sleep(0.1)
     except SerialException:
         print("Failed to send settings write command over serial.")
         return False
