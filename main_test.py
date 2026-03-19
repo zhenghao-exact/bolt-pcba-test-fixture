@@ -126,20 +126,15 @@ class BoltTest:
 
     def open_serial_port(self, max_retries: int = 3) -> bool:
         """
-        Dynamically discover and open the Bolt PCBA serial port.
+        Open the Bolt PCBA serial port (UART via /dev/ttyUSB0).
 
-        Scans for new /dev/ttyACM* ports that appeared after the baseline was
-        captured. If multiple new ports are found, tries the lowest numbered
-        one first. Waits up to 20s for the port to become openable.
-
-        If the DUT does not enumerate as a USB serial device, we will:
-          1. Power‑cycle the DUT via the PPK2.
-          2. Re‑flash the test firmware.
-          3. Retry the USB detection.
-        After max_retries attempts we mark the USB connection as failed.
+        Uses fixed port /dev/ttyUSB0 as the fixture connects the DUT via UART.
+        Waits up to 20s for the port to become openable. On failure, retries
+        after power‑cycling the DUT and reflashing test firmware.
         """
         overall_deadline = time.time() + 60.0  # 1 minute max from start of USB step
         attempt = 0
+        target_port = "/dev/ttyUSB0"
         while attempt < max_retries:
             if time.time() >= overall_deadline:
                 break
@@ -147,31 +142,11 @@ class BoltTest:
             attempt += 1
             print(f"USB: attempting to open DUT serial port (attempt {attempt}/{max_retries})")
 
-            # Scan for current ports and find new ones
-            current_ports = set(self._scan_acm_ports())
-            new_ports = current_ports - self.baseline_ports
-
-            if not new_ports:
-                print("USB: no new serial ports detected yet")
-                # Wait a bit before retrying
-                time.sleep(1.0)
-                if attempt >= max_retries:
-                    break
-                continue
-
-            # Sort new ports by number and try the lowest one first
-            sorted_new_ports = sorted(new_ports, key=lambda x: int(x.replace("/dev/ttyACM", "")))
-            target_port = sorted_new_ports[0]
-
-            if len(sorted_new_ports) > 1:
-                print(f"USB: multiple new ports detected: {sorted_new_ports}, trying lowest: {target_port}")
-
             # Wait up to 20s for the port to become available and openable
             port_timeout = 20.0
             port_deadline = time.time() + port_timeout
             print(f"USB: waiting up to {port_timeout}s for {target_port} to become available")
 
-            port_opened = False
             while time.time() < port_deadline:
                 if not os.path.exists(target_port):
                     time.sleep(0.5)
@@ -191,9 +166,6 @@ class BoltTest:
 
             # If we reach here, the port didn't become openable within the timeout
             print(f"USB: port {target_port} did not become openable within {port_timeout}s")
-
-            # If we reach here, the DUT did not enumerate as a USB serial device.
-            print("USB: no Bolt serial port detected on this attempt")
 
             if attempt >= max_retries:
                 break
