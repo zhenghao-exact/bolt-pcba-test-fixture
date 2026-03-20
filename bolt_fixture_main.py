@@ -628,71 +628,78 @@ class BoltTest:
 
     def run_analog_calibration(self) -> bool:
         """
-        Analog calibration: SKIPPED (force pass).
-        Original implementation commented out below.
+        Run the analog calibration sequence by calling calibraor_test.py functions directly.
+
+        The calibration script handles all calibration logic including:
+          - OFFSET (0 Ω) calibration
+          - HIGH (270 kΩ) calibration
+          - Reference value programming
+          - Verification at multiple temperature points
+
+        Captures calibration parameters and temperature readings for CSV reporting.
+
+        Note: This method re-detects the serial port before calibration, as a PPK2
+        power-cycle may have caused the DUT to re-enumerate as a different ttyACMx port.
         """
-        print("Analog cal: SKIPPED (force pass)")
-        self.tests["analog"] = True
-        return True
-        # --- Original implementation (commented out) ---
-        # """
-        # Run the analog calibration sequence by calling calibraor_test.py functions directly.
-        # The calibration script handles all calibration logic including:
-        #   - OFFSET (0 Ω) calibration
-        #   - HIGH (270 kΩ) calibration
-        #   - Reference value programming
-        #   - Verification at multiple temperature points
-        # Captures calibration parameters and temperature readings for CSV reporting.
-        # Note: This method re-detects the serial port before calibration, as a PPK2
-        # power-cycle may have caused the DUT to re-enumerate as a different ttyACMx port.
-        # """
-        # # Re-detect serial port in case PPK2 power-cycle changed the ttyACMx port
-        # if not self.reopen_serial_port_for_calibration():
-        #     print("Analog cal: failed to re-detect serial port after power-cycle")
-        #     self.tests["analog"] = False
-        #     self.failure = True
-        #     return False
-        #
-        # # Import calibration functions directly instead of using subprocess
-        # try:
-        #     from calibraor_test import run_full_analog_calibration, CALIBRATION_MODE_FAST
-        # except ImportError:
-        #     print("Analog cal: failed to import calibraor_test module")
-        #     self.tests["analog"] = False
-        #     self.failure = True
-        #     return False
-        #
-        # print("Analog cal: running calibration sequence (fast mode)...")
-        # try:
-        #     cal_result = run_full_analog_calibration(self.ser, mode=CALIBRATION_MODE_FAST)
-        #     if cal_result.get("success", False):
-        #         self.measurements["adc_offset_raw_factory"] = cal_result.get("offset_raw")
-        #         self.measurements["adc_high_raw_factory"] = cal_result.get("high_raw")
-        #         self.measurements["adc_ref_factory"] = cal_result.get("reference", 3619.64)
-        #         self.measurements["adc_temp_27k_measured_c"] = cal_result.get("temp_27k")
-        #         self.measurements["adc_temp_10k_measured_c"] = cal_result.get("temp_10k")
-        #         self.measurements["adc_temp_4k99_measured_c"] = cal_result.get("temp_4k99")
-        #         self.measurements["adc_temp_2k2_measured_c"] = cal_result.get("temp_2k2")
-        #         print("Analog cal: calibration completed successfully")
-        #         print(f"  Offset: {cal_result.get('offset_raw')}")
-        #         print(f"  High: {cal_result.get('high_raw')}")
-        #         print(f"  Reference: {cal_result.get('reference')}")
-        #         print(f"  Temp 27k: {cal_result.get('temp_27k')} °C")
-        #         print(f"  Temp 10k: {cal_result.get('temp_10k')} °C")
-        #         print(f"  Temp 4.99k: {cal_result.get('temp_4k99')} °C")
-        #         print(f"  Temp 2.2k: {cal_result.get('temp_2k2')} °C")
-        #         self.tests["analog"] = True
-        #         return True
-        #     else:
-        #         print("Analog cal: calibration failed")
-        #         self.tests["analog"] = False
-        #         self.failure = True
-        #         return False
-        # except Exception as exc:
-        #     print(f"Analog cal: error during calibration: {exc}")
-        #     self.tests["analog"] = False
-        #     self.failure = True
-        #     return False
+        # Re-detect serial port in case PPK2 power-cycle changed the ttyACMx port
+        if not self.reopen_serial_port_for_calibration():
+            print("Analog cal: failed to re-detect serial port after power-cycle")
+            self.tests["analog"] = False
+            self.failure = True
+            return False
+
+        # Send w1 slpz 0 before calibration (same timing as settings write)
+        bolt_control.clear_serial_buffer(self.ser)
+        time.sleep(2.0)
+        if not bolt_control.send_shell_command(self.ser, "w1 slpz 0"):
+            print("Analog cal: failed to send w1 slpz 0 command")
+        time.sleep(0.1)
+        bolt_control.clear_serial_buffer(self.ser)
+
+        # Import calibration functions directly instead of using subprocess
+        try:
+            from calibraor_test import run_full_analog_calibration, CALIBRATION_MODE_FAST
+        except ImportError:
+            print("Analog cal: failed to import calibraor_test module")
+            self.tests["analog"] = False
+            self.failure = True
+            return False
+
+        print("Analog cal: running calibration sequence (fast mode)...")
+        try:
+            cal_result = run_full_analog_calibration(self.ser, mode=CALIBRATION_MODE_FAST)
+
+            # Store calibration parameters in measurements
+            if cal_result.get("success", False):
+                self.measurements["adc_offset_raw_factory"] = cal_result.get("offset_raw")
+                self.measurements["adc_high_raw_factory"] = cal_result.get("high_raw")
+                self.measurements["adc_ref_factory"] = cal_result.get("reference", 3619.64)
+                self.measurements["adc_temp_27k_measured_c"] = cal_result.get("temp_27k")
+                self.measurements["adc_temp_10k_measured_c"] = cal_result.get("temp_10k")
+                self.measurements["adc_temp_4k99_measured_c"] = cal_result.get("temp_4k99")
+                self.measurements["adc_temp_2k2_measured_c"] = cal_result.get("temp_2k2")
+
+                print("Analog cal: calibration completed successfully")
+                print(f"  Offset: {cal_result.get('offset_raw')}")
+                print(f"  High: {cal_result.get('high_raw')}")
+                print(f"  Reference: {cal_result.get('reference')}")
+                print(f"  Temp 27k: {cal_result.get('temp_27k')} °C")
+                print(f"  Temp 10k: {cal_result.get('temp_10k')} °C")
+                print(f"  Temp 4.99k: {cal_result.get('temp_4k99')} °C")
+                print(f"  Temp 2.2k: {cal_result.get('temp_2k2')} °C")
+
+                self.tests["analog"] = True
+                return True
+            else:
+                print("Analog cal: calibration failed")
+                self.tests["analog"] = False
+                self.failure = True
+                return False
+        except Exception as exc:
+            print(f"Analog cal: error during calibration: {exc}")
+            self.tests["analog"] = False
+            self.failure = True
+            return False
 
     # --- Sleep current test -----------------------------------------------
 
