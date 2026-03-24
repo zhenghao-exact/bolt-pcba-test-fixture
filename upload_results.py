@@ -133,8 +133,8 @@ def update_sheet_on_drive(sheets_service, sheet_id):
 def upload_to_drive():
     """
     Sync local fiscal-year CSV to Google Sheets. Rows are produced by csv_manager;
-    the Sleep Current Test column may be True, False, or the string \"skipped\"
-    when the operator skipped sleep measurement in the GUI.
+    the Sleep Current Test column may be True, False, or 'skipped' when the
+    operator skipped sleep measurement in the GUI.
     """
     try:
         sheet_service, drive_service = authenticate()
