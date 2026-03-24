@@ -150,6 +150,7 @@ class BoltTest:
         self.ser = None
         self.failure = False
         self.baseline_ports: set[str] = set()
+        self.dut_serial_port: Optional[str] = None
         self.ppk2_sleep_error = False  # Flag for abnormal PPK2 readings (> 1000 uA)
         self.ble_first_failure = False  # True when we hit first BLE failure since last success
 
@@ -169,16 +170,73 @@ class BoltTest:
                 ports.append(port)
         return sorted(ports, key=lambda x: int(x.replace("/dev/ttyACM", "")))
 
+    def _scan_ttyusb_ports(self) -> list[str]:
+        """
+        Scan for all /dev/ttyUSB* devices and return a sorted list by index.
+        """
+        ports = []
+        for i in range(256):
+            port = f"/dev/ttyUSB{i}"
+            if os.path.exists(port):
+                ports.append(port)
+        return sorted(ports, key=lambda x: int(x.replace("/dev/ttyUSB", "")))
+
     def _capture_baseline_ports(self) -> None:
         """
-        Capture the current set of /dev/ttyACM* ports as a baseline.
+        Capture existing /dev/ttyACM* and /dev/ttyUSB* nodes as a baseline.
 
-        This should be called at the start of the test, before the Bolt PCBA
-        is powered on, to establish which ports already exist.
+        Call at test start before the Bolt PCBA is powered on so DUT UART
+        bridges that appear later can be detected as new vs this set.
         """
-        ports = self._scan_acm_ports()
-        self.baseline_ports = set(ports)
-        print(f"USB: captured baseline ports: {sorted(self.baseline_ports)}")
+        acm = self._scan_acm_ports()
+        ttyu = self._scan_ttyusb_ports()
+        self.baseline_ports = set(acm) | set(ttyu)
+        print(f"USB: captured baseline ports (ACM+ttyUSB): {sorted(self.baseline_ports)}")
+
+    def _sorted_ttyusb_candidates(self, current: list[str]) -> list[str]:
+        """Prefer ttyUSB devices not in baseline; else any current ttyUSB (stable path)."""
+        new_only = [p for p in current if p not in self.baseline_ports]
+        key = lambda x: int(x.replace("/dev/ttyUSB", ""))
+        if new_only:
+            return sorted(new_only, key=key)
+        return sorted(current, key=key)
+
+    def _try_open_first_available_ttyusb(
+        self,
+        deadline: float,
+        overall_deadline: float | None = None,
+    ) -> Optional[str]:
+        """
+        Poll until deadline for a usable DUT ttyUSB port and open it.
+
+        Returns the device path on success (sets self.ser and self.dut_serial_port).
+        """
+        warned_fallback = False
+        while time.time() < deadline:
+            if overall_deadline is not None and time.time() >= overall_deadline:
+                return None
+            current = self._scan_ttyusb_ports()
+            new_only = [p for p in current if p not in self.baseline_ports]
+            if not new_only and current and not warned_fallback:
+                print(
+                    "USB: no new ttyUSB vs baseline; trying all ttyUSB devices "
+                    "(bridge may have been present before power-up)"
+                )
+                warned_fallback = True
+            candidates = self._sorted_ttyusb_candidates(current)
+            if not candidates:
+                time.sleep(0.5)
+                continue
+            for port in candidates:
+                if not os.path.exists(port):
+                    continue
+                ser = bolt_control.open_serial(port)
+                if ser:
+                    self.ser = ser
+                    self.dut_serial_port = port
+                    return port
+            time.sleep(0.5)
+        return None
 
     def _wait_for_serial_device(
         self,
@@ -206,56 +264,41 @@ class BoltTest:
 
     def open_serial_port(self, max_retries: int = 3) -> bool:
         """
-        Dynamically discover and open the Bolt PCBA serial port.
+        Dynamically discover and open the Bolt PCBA UART (/dev/ttyUSB*) after flash/reset.
 
-        Scans for new /dev/ttyACM* ports that appeared after the baseline was
-        captured. If multiple new ports are found, tries the lowest numbered
-        one first. Waits up to 20s for the port to become openable.
+        Rescans ttyUSB on each attempt and prefers devices not in the baseline
+        captured at test start (lowest index first). If the UART bridge was
+        already present at baseline, falls back to trying any ttyUSB device.
 
-        If the DUT does not enumerate as a USB serial device, we will:
+        If the DUT does not become usable, we will:
           1. Power‑cycle the DUT via the PPK2.
           2. Re‑flash the test firmware.
-          3. Retry the USB detection.
+          3. Retry the UART detection.
         After max_retries attempts we mark the USB connection as failed.
         """
         overall_deadline = time.time() + 60.0  # 1 minute max from start of USB step
         attempt = 0
-        target_port = "/dev/ttyUSB0"
         while attempt < max_retries:
             if time.time() >= overall_deadline:
                 break
 
             attempt += 1
             print(f"USB: attempting to open DUT serial port (attempt {attempt}/{max_retries})")
+            print(f"USB: rescanning ttyUSB (baseline has {len(self.baseline_ports)} port(s))")
 
-
-            # Wait up to 20s for the port to become available and openable
-            port_timeout = 20.0
+            port_timeout = min(20.0, max(0.0, overall_deadline - time.time()))
+            if port_timeout <= 0:
+                break
             port_deadline = time.time() + port_timeout
-            print(f"USB: waiting up to {port_timeout}s for {target_port} to become available")
+            print(f"USB: waiting up to {port_timeout:.1f}s for a usable DUT ttyUSB port")
 
-            while time.time() < port_deadline:
-                if not os.path.exists(target_port):
-                    time.sleep(0.5)
-                    continue
+            opened = self._try_open_first_available_ttyusb(port_deadline, overall_deadline)
+            if opened:
+                self.tests["usb_connection"] = True
+                print(f"USB: opened serial port {opened} on attempt {attempt}")
+                return True
 
-                # Port exists, try to open it
-                ser = bolt_control.open_serial(target_port)
-                if ser:
-                    # Successfully opened the serial port
-                    self.ser = ser
-                    self.tests["usb_connection"] = True
-                    print(f"USB: opened serial port {target_port} on attempt {attempt}")
-                    return True
-                else:
-                    # Port exists but couldn't open it yet, keep trying
-                    time.sleep(0.5)
-
-            # If we reach here, the port didn't become openable within the timeout
-            print(f"USB: port {target_port} did not become openable within {port_timeout}s")
-
-            # If we reach here, the DUT did not enumerate as a USB serial device.
-            print("USB: no Bolt serial port detected on this attempt")
+            print(f"USB: no DUT ttyUSB became openable within {port_timeout:.1f}s")
 
             if attempt >= max_retries:
                 break
@@ -285,25 +328,16 @@ class BoltTest:
 
     def reopen_serial_port_for_calibration(self, timeout_s: float = 10.0) -> bool:
         """
-        Re-detect and reopen the Bolt serial port after a PPK2 power-cycle.
-        
-        This helper is used when the DUT may have re-enumerated as a different
-        /dev/ttyACM* port after a power cycle. It scans for new ports relative
-        to the baseline captured at test start, selects the lowest-numbered new
-        port, and attempts to open it.
-        
+        Re-detect and reopen the Bolt UART after a PPK2 power-cycle.
+
+        Tries the last known ``self.dut_serial_port`` first, then the same
+        ttyUSB discovery rules as ``open_serial_port`` (baseline vs rescan).
+
         This does NOT modify the earlier usb_connection test result - it only
         updates self.ser for use in subsequent test steps.
-        
-        Args:
-            timeout_s: Maximum time to wait for port to become available (default: 10s)
-        
-        Returns:
-            True if the port was successfully reopened, False otherwise
         """
         print("Analog cal: re-detecting serial port after potential PPK2 power-cycle...")
-        
-        # Close existing serial connection if any
+
         if self.ser:
             try:
                 self.ser.close()
@@ -311,30 +345,39 @@ class BoltTest:
                 pass
             self.ser = None
 
-        target_port = "/dev/ttyUSB0"
-
-        # Wait for the port to become available and openable
         port_deadline = time.time() + timeout_s
-        print(f"Analog cal: waiting up to {timeout_s}s for {target_port} to become available")
-        
+        print(f"Analog cal: waiting up to {timeout_s}s for DUT ttyUSB port")
+        warned_fallback = False
         while time.time() < port_deadline:
-            if not os.path.exists(target_port):
+            current = self._scan_ttyusb_ports()
+            new_only = [p for p in current if p not in self.baseline_ports]
+            if not new_only and current and not warned_fallback:
+                print(
+                    "Analog cal: no new ttyUSB vs baseline; trying all ttyUSB devices "
+                    "(bridge may have been present before power-up)"
+                )
+                warned_fallback = True
+            candidates = self._sorted_ttyusb_candidates(current)
+            if not candidates:
                 time.sleep(0.5)
                 continue
-            
-            # Port exists, try to open it
-            ser = bolt_control.open_serial(target_port)
-            if ser:
-                # Successfully opened the serial port
-                self.ser = ser
-                print(f"Analog cal: successfully reopened serial port {target_port}")
-                return True
+            preferred = self.dut_serial_port
+            if preferred and preferred in candidates:
+                ordered = [preferred] + [p for p in candidates if p != preferred]
             else:
-                # Port exists but couldn't open it yet, keep trying
-                time.sleep(0.5)
-        
-        # Timeout reached
-        print(f"Analog cal: port {target_port} did not become openable within {timeout_s}s")
+                ordered = candidates
+            for port in ordered:
+                if not os.path.exists(port):
+                    continue
+                ser = bolt_control.open_serial(port)
+                if ser:
+                    self.ser = ser
+                    self.dut_serial_port = port
+                    print(f"Analog cal: successfully reopened serial port {port}")
+                    return True
+            time.sleep(0.5)
+
+        print(f"Analog cal: no DUT ttyUSB became openable within {timeout_s}s")
         return False
 
     def flash_test_firmware(self) -> bool:
@@ -639,9 +682,9 @@ class BoltTest:
         Captures calibration parameters and temperature readings for CSV reporting.
 
         Note: This method re-detects the serial port before calibration, as a PPK2
-        power-cycle may have caused the DUT to re-enumerate as a different ttyACMx port.
+        power-cycle may have caused the DUT UART to re-enumerate as a different ttyUSBx port.
         """
-        # Re-detect serial port in case PPK2 power-cycle changed the ttyACMx port
+        # Re-detect serial port in case PPK2 power-cycle changed the ttyUSBx port
         if not self.reopen_serial_port_for_calibration():
             print("Analog cal: failed to re-detect serial port after power-cycle")
             self.tests["analog"] = False
@@ -895,7 +938,7 @@ def run_bolt_test(app: gui.App) -> BoltTest:
             print(f"USB: warning - failed to turn off PPK2 power: {exc}")
             # Continue anyway, as this might be a development environment without PPK2
 
-        # Capture baseline of existing /dev/ttyACM* ports before the Bolt is powered on
+        # Capture baseline of existing /dev/ttyACM* and /dev/ttyUSB* before the Bolt is powered on
         test._capture_baseline_ports()
 
         test.measurements["test_ID"] = int(start_time)
@@ -946,7 +989,7 @@ def run_bolt_test(app: gui.App) -> BoltTest:
             app.update_test_indicator(3, False)
             return test
         app.update_test_indicator(3, True)
-        time.sleep(3.0)
+        time.sleep(8.0)
 
         # Indicator 4: set serial on DUT.
         if not test.program_serial_on_dut():
