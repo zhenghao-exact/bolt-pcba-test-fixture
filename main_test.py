@@ -14,6 +14,7 @@ import printer_manager
 import csv_manager
 
 import bolt_control
+from serial import SerialException  # type: ignore[import-not-found]
 
 
 # Paths to firmware images on the Pi. Must match bolt_fixture_main.py so flash
@@ -232,6 +233,61 @@ class BoltTest:
         print("USB: failed to detect DUT serial port within 60s – marking USB connection as failed")
         self.tests["usb_connection"] = False
         self.failure = True
+        return False
+
+    def reopen_serial_port_for_calibration(self, timeout_s: float = 10.0) -> bool:
+        """
+        Re-detect and reopen the DUT ttyUSB port.
+
+        The USB-UART adapter (e.g. CH341) can disconnect/re-enumerate during the test,
+        which invalidates an existing Serial object. Rescans ttyUSB and reopens without
+        changing the usb_connection test flag.
+        """
+        print("Analog cal: re-detecting serial port before calibration...")
+
+        if self.ser:
+            try:
+                self.ser.close()
+            except Exception:
+                pass
+            self.ser = None
+
+        deadline = time.time() + timeout_s
+        warned_fallback = False
+        while time.time() < deadline:
+            current = self._scan_ttyusb_ports()
+            new_only = [p for p in current if p not in self.baseline_ports]
+            if not new_only and current and not warned_fallback:
+                print(
+                    "Analog cal: no new ttyUSB vs baseline; trying all ttyUSB devices "
+                    "(bridge may have been present before power-up)"
+                )
+                warned_fallback = True
+
+            candidates = self._sorted_ttyusb_candidates(current)
+            if not candidates:
+                time.sleep(0.5)
+                continue
+
+            preferred = self.dut_serial_port
+            if preferred and preferred in candidates:
+                ordered = [preferred] + [p for p in candidates if p != preferred]
+            else:
+                ordered = candidates
+
+            for port in ordered:
+                if not os.path.exists(port):
+                    continue
+                ser = bolt_control.open_serial(port)
+                if ser:
+                    self.ser = ser
+                    self.dut_serial_port = port
+                    print(f"Analog cal: reopened serial port {port}")
+                    return True
+
+            time.sleep(0.5)
+
+        print(f"Analog cal: failed to reopen DUT ttyUSB within {timeout_s}s")
         return False
 
     def flash_test_firmware(self) -> bool:
@@ -543,7 +599,11 @@ class BoltTest:
         end_time = time.time() + 8.0
         saw_success = False
         while time.time() < end_time:
-            line = self.ser.readline().decode(errors="ignore").strip()
+            try:
+                line = self.ser.readline().decode(errors="ignore").strip()
+            except (SerialException, OSError) as exc:
+                print(f"Analog cal: serial error while waiting for rr_set response: {exc}")
+                return False
             if not line:
                 continue
             print(f"[adc_comp_rr] {line}")
@@ -581,10 +641,28 @@ class BoltTest:
             self.failure = True
             return False
 
-        # Set Rr value for ADC compensation before calibration
-        if not self._set_adc_comp_rr():
-            print("Analog cal: warning - failed to set Rr value, continuing anyway")
-            # Don't fail the test if Rr set fails, but log the warning
+        if not self.reopen_serial_port_for_calibration(timeout_s=10.0):
+            self.tests["analog"] = False
+            self.failure = True
+            return False
+
+        rr_ok = False
+        try:
+            rr_ok = self._set_adc_comp_rr()
+        except (SerialException, OSError) as exc:
+            print(f"Analog cal: serial error during rr_set: {exc}")
+            rr_ok = False
+
+        if not rr_ok:
+            print("Analog cal: rr_set failed; retrying once after UART reopen...")
+            if self.reopen_serial_port_for_calibration(timeout_s=10.0):
+                try:
+                    rr_ok = self._set_adc_comp_rr()
+                except (SerialException, OSError) as exc:
+                    print(f"Analog cal: serial error during rr_set retry: {exc}")
+                    rr_ok = False
+            if not rr_ok:
+                print("Analog cal: warning - failed to set Rr value, continuing anyway")
 
         # Import calibration functions directly instead of using subprocess
         # This allows us to capture the returned calibration data
@@ -598,9 +676,23 @@ class BoltTest:
 
         print("Analog cal: running calibration sequence (fast mode)...")
         try:
-            # Run calibration in fast mode for production throughput
-            cal_result = run_full_analog_calibration(self.ser, mode=CALIBRATION_MODE_FAST)
-            
+            try:
+                cal_result = run_full_analog_calibration(self.ser, mode=CALIBRATION_MODE_FAST)
+            except (SerialException, OSError) as exc:
+                print(f"Analog cal: serial error during calibration: {exc}")
+                print("Analog cal: retrying once after UART reopen...")
+                if not self.reopen_serial_port_for_calibration(timeout_s=10.0):
+                    self.tests["analog"] = False
+                    self.failure = True
+                    return False
+                try:
+                    cal_result = run_full_analog_calibration(self.ser, mode=CALIBRATION_MODE_FAST)
+                except (SerialException, OSError) as exc2:
+                    print(f"Analog cal: serial error during calibration retry: {exc2}")
+                    self.tests["analog"] = False
+                    self.failure = True
+                    return False
+
             # Store calibration parameters in measurements
             if cal_result.get("success", False):
                 self.measurements["adc_offset_raw_factory"] = cal_result.get("offset_raw")

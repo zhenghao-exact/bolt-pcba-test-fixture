@@ -15,6 +15,7 @@ import csv_manager
 import upload_results
 
 import bolt_control
+from serial import SerialException  # type: ignore[import-not-found]
 
 
 # Paths to firmware images on the Pi. Adjust these to match the Bolt build
@@ -328,15 +329,13 @@ class BoltTest:
 
     def reopen_serial_port_for_calibration(self, timeout_s: float = 10.0) -> bool:
         """
-        Re-detect and reopen the Bolt UART after a PPK2 power-cycle.
+        Re-detect and reopen the DUT ttyUSB port.
 
-        Tries the last known ``self.dut_serial_port`` first, then the same
-        ttyUSB discovery rules as ``open_serial_port`` (baseline vs rescan).
-
-        This does NOT modify the earlier usb_connection test result - it only
-        updates self.ser for use in subsequent test steps.
+        The USB-UART adapter (e.g. CH341) can disconnect/re-enumerate during the test,
+        which invalidates an existing Serial object. Rescans ttyUSB and reopens without
+        changing the usb_connection test flag.
         """
-        print("Analog cal: re-detecting serial port after potential PPK2 power-cycle...")
+        print("Analog cal: re-detecting serial port before calibration...")
 
         if self.ser:
             try:
@@ -345,10 +344,9 @@ class BoltTest:
                 pass
             self.ser = None
 
-        port_deadline = time.time() + timeout_s
-        print(f"Analog cal: waiting up to {timeout_s}s for DUT ttyUSB port")
+        deadline = time.time() + timeout_s
         warned_fallback = False
-        while time.time() < port_deadline:
+        while time.time() < deadline:
             current = self._scan_ttyusb_ports()
             new_only = [p for p in current if p not in self.baseline_ports]
             if not new_only and current and not warned_fallback:
@@ -357,15 +355,18 @@ class BoltTest:
                     "(bridge may have been present before power-up)"
                 )
                 warned_fallback = True
+
             candidates = self._sorted_ttyusb_candidates(current)
             if not candidates:
                 time.sleep(0.5)
                 continue
+
             preferred = self.dut_serial_port
             if preferred and preferred in candidates:
                 ordered = [preferred] + [p for p in candidates if p != preferred]
             else:
                 ordered = candidates
+
             for port in ordered:
                 if not os.path.exists(port):
                     continue
@@ -373,11 +374,12 @@ class BoltTest:
                 if ser:
                     self.ser = ser
                     self.dut_serial_port = port
-                    print(f"Analog cal: successfully reopened serial port {port}")
+                    print(f"Analog cal: reopened serial port {port}")
                     return True
+
             time.sleep(0.5)
 
-        print(f"Analog cal: no DUT ttyUSB became openable within {timeout_s}s")
+        print(f"Analog cal: failed to reopen DUT ttyUSB within {timeout_s}s")
         return False
 
     def flash_test_firmware(self) -> bool:
@@ -708,20 +710,38 @@ class BoltTest:
         Note: This method re-detects the serial port before calibration, as a PPK2
         power-cycle may have caused the DUT UART to re-enumerate as a different ttyUSBx port.
         """
-        # Re-detect serial port in case PPK2 power-cycle changed the ttyUSBx port
-        if not self.reopen_serial_port_for_calibration():
-            print("Analog cal: failed to re-detect serial port after power-cycle")
+        if not self.reopen_serial_port_for_calibration(timeout_s=10.0):
+            print("Analog cal: failed to re-detect serial port before calibration")
             self.tests["analog"] = False
             self.failure = True
             return False
 
-        # Send w1 slpz 0 before calibration (same timing as settings write)
-        bolt_control.clear_serial_buffer(self.ser)
-        time.sleep(2.0)
-        if not bolt_control.send_shell_command(self.ser, "w1 slpz 0"):
-            print("Analog cal: failed to send w1 slpz 0 command")
-        time.sleep(0.1)
-        bolt_control.clear_serial_buffer(self.ser)
+        def _w1_prep() -> bool:
+            bolt_control.clear_serial_buffer(self.ser)
+            time.sleep(2.0)
+            if not bolt_control.send_shell_command(self.ser, "w1 slpz 0"):
+                print("Analog cal: failed to send w1 slpz 0 command")
+                return False
+            time.sleep(0.1)
+            bolt_control.clear_serial_buffer(self.ser)
+            return True
+
+        w1_ok = False
+        try:
+            w1_ok = _w1_prep()
+        except (SerialException, OSError) as exc:
+            print(f"Analog cal: serial error during w1 prep: {exc}")
+            w1_ok = False
+
+        if not w1_ok:
+            print("Analog cal: retrying w1 prep once after UART reopen...")
+            if self.reopen_serial_port_for_calibration(timeout_s=10.0):
+                try:
+                    w1_ok = _w1_prep()
+                except (SerialException, OSError) as exc:
+                    print(f"Analog cal: serial error during w1 prep retry: {exc}")
+            if not w1_ok:
+                print("Analog cal: warning - w1 prep incomplete, continuing anyway")
 
         # Import calibration functions directly instead of using subprocess
         try:
@@ -734,7 +754,22 @@ class BoltTest:
 
         print("Analog cal: running calibration sequence (fast mode)...")
         try:
-            cal_result = run_full_analog_calibration(self.ser, mode=CALIBRATION_MODE_FAST)
+            try:
+                cal_result = run_full_analog_calibration(self.ser, mode=CALIBRATION_MODE_FAST)
+            except (SerialException, OSError) as exc:
+                print(f"Analog cal: serial error during calibration: {exc}")
+                print("Analog cal: retrying once after UART reopen...")
+                if not self.reopen_serial_port_for_calibration(timeout_s=10.0):
+                    self.tests["analog"] = False
+                    self.failure = True
+                    return False
+                try:
+                    cal_result = run_full_analog_calibration(self.ser, mode=CALIBRATION_MODE_FAST)
+                except (SerialException, OSError) as exc2:
+                    print(f"Analog cal: serial error during calibration retry: {exc2}")
+                    self.tests["analog"] = False
+                    self.failure = True
+                    return False
 
             # Store calibration parameters in measurements
             if cal_result.get("success", False):
