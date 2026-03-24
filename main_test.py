@@ -1007,6 +1007,7 @@ def run_bolt_test_headless(prod_mode: bool = False) -> BoltTest:
             print("Step 3: USB connection - FAILED")
             return test
         print("Step 3: USB connection - PASSED")
+        time.sleep(6.0)
 
         # Step 4: set serial on DUT.
         print("Step 4: Set serial on DUT")
