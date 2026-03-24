@@ -456,7 +456,31 @@ class BoltTest:
         if not bolt_id:
             return False
 
-        ok = bolt_control.set_pcba_serial(self.ser, str(bolt_id))
+        try:
+            ok = bolt_control.set_pcba_serial(self.ser, str(bolt_id))
+        except Exception as exc:
+            print(f"Set serial: exception during settings write: {exc}")
+            ok = False
+
+        if not ok:
+            print("Set serial: first attempt failed; retrying after UART reopen...")
+            if self.ser:
+                try:
+                    self.ser.close()
+                except Exception:
+                    pass
+                self.ser = None
+
+            if not self.open_serial_port(max_retries=1):
+                self.tests["set_serial"] = False
+                self.failure = True
+                return False
+            try:
+                ok = bolt_control.set_pcba_serial(self.ser, str(bolt_id))
+            except Exception as exc:
+                print(f"Set serial: exception during retry: {exc}")
+                ok = False
+
         self.tests["set_serial"] = ok
         if not ok:
             self.failure = True

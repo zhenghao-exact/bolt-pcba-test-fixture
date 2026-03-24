@@ -1,4 +1,5 @@
 import re
+import select
 import time
 from typing import Tuple, Optional, List
 
@@ -111,14 +112,21 @@ def wait_for_prompt(ser: Serial, timeout_s: float = 2.0) -> bool:
 
 def clear_serial_buffer(ser: Serial) -> None:
     """Read and discard any pending data from the serial buffer."""
-    ser.timeout = 0
+    # Do not toggle ser.timeout here: that triggers termios reconfigure. If the
+    # USB-UART (e.g. CH341) is re-enumerating, that can raise EIO and crash callers.
+    try:
+        fd = ser.fileno()
+    except Exception:
+        return
+
     try:
         while True:
-            line = ser.readline()
-            if not line:
+            r, _, _ = select.select([fd], [], [], 0.0)
+            if not r:
                 break
-    finally:
-        ser.timeout = 0.5
+            _ = ser.read(4096)
+    except (SerialException, OSError, ValueError):
+        return
 
 
 # --- ADC calibration helpers -------------------------------------------------
