@@ -63,6 +63,7 @@ measurements_template: Dict[str, Any] = {
     "adc_temp_2k2_measured_c": None,
     # Supply voltage (fixed 3.3V from PPK2)
     "supply_voltage_v": 3.3,
+    "sleep_current_skipped": False,
 }
 
 
@@ -975,11 +976,19 @@ def run_bolt_test(app: gui.App) -> BoltTest:
         app.update_test_indicator(8, True)
 
         # Indicator 9: sleep current test.
-        app.sleep_current_window()
-        if not test.run_sleep_current_test():
-            app.update_test_indicator(9, False)
-            return test
-        app.update_test_indicator(9, True)
+        app.sleep_current_window(allow_skip=True)
+        if app.sleep_current_skipped:
+            print("Sleep current: SKIPPED by operator (not measured).")
+            test.tests["sleep_current"] = True
+            test.measurements["sleep_current_skipped"] = True
+            test.measurements["sleep_current_ua"] = None
+            app.update_test_indicator(8, True)
+            app.update_test_indicator(9, True)
+        else:
+            if not test.run_sleep_current_test():
+                app.update_test_indicator(9, False)
+                return test
+            app.update_test_indicator(9, True)
 
         # Final result aggregation.
         final_ok = test.evaluate_overall_result()

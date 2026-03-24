@@ -64,8 +64,11 @@ def assemble_row(results: dict, measurements: dict, user: str, fixture: int):
     csv_row.append(measurements.get("adc_temp_4k99_measured_c"))  # Temp 4.99k (°C)
     csv_row.append(measurements.get("adc_temp_2k2_measured_c"))  # Temp 2.2k (°C)
     
-    # Sleep Current
-    csv_row.append(results.get("sleep_current", False))
+    # Sleep Current (column shows "skipped" when operator skipped measurement in GUI)
+    if measurements.get("sleep_current_skipped"):
+        csv_row.append("skipped")
+    else:
+        csv_row.append(results.get("sleep_current", False))
     csv_row.append(measurements.get("sleep_current_ua"))  # Sleep Current (uA)
     
     # Supply Voltage (fixed 3.3V)

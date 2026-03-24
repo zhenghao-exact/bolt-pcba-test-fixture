@@ -24,6 +24,7 @@ class App(Tk):
         self.print_label_var = IntVar()
         self.imu_instruction_var = IntVar()
         self.sleep_current_var = IntVar()
+        self.sleep_current_skipped = False
         self.restart_fixture_var = IntVar()
         self.reboot_pi_var = IntVar()
         self.ble_retry_var = IntVar()
@@ -118,6 +119,7 @@ class App(Tk):
     
     # Set colour indicators to to white at start of test
     def reset_indicators(self):
+        self.sleep_current_skipped = False
         for test_number in range(10):
             self.frame.grid_slaves(column=1, row=test_number+1)[0].destroy()
             self.__create_circle(column=1, row=test_number+1, color=self.white)
@@ -240,15 +242,23 @@ class App(Tk):
         self.wait_variable(self.imu_instruction_var)
 
     # Sleep current test instructions
-    def sleep_current_window(self):
+    def sleep_current_window(self, allow_skip: bool = False):
         popup = Toplevel(padx=20, pady=20)
         popup.protocol("WM_DELETE_WINDOW", self.disable_event)
-        
+
+        self.sleep_current_skipped = False
+
         def acknowledge():
             self.sleep_current_var.set(1)
             popup.destroy()
             return
-    
+
+        def skip_sleep_current():
+            self.sleep_current_skipped = True
+            self.sleep_current_var.set(1)
+            popup.destroy()
+            return
+
         popup.title("Sleep Current Test Instructions")
 
         msg = (
@@ -258,13 +268,18 @@ class App(Tk):
             "3. Ensure the PPK2 alligator clips remain connected to the Bolt.\n\n"
             "Press OK once the connections are correct to begin the current measurement."
         )
+        if allow_skip:
+            msg += "\n\nOr press SKIP to record this step as skipped (not measured)."
 
         label = ttk.Label(popup, text=msg, anchor=W, justify=LEFT)
         label.config(font=("TkFixedFont", 14))
         ok_button = ttk.Button(popup, text="OK", command=acknowledge)
-        
-        label.grid(column=0, row=0, padx=10, pady=10)
+
+        label.grid(column=0, row=0, columnspan=2 if allow_skip else 1, padx=10, pady=10)
         ok_button.grid(column=0, row=1, padx=10, pady=10)
+        if allow_skip:
+            skip_button = ttk.Button(popup, text="SKIP", command=skip_sleep_current)
+            skip_button.grid(column=1, row=1, padx=10, pady=10)
 
         self.sleep_current_var.set(0)
         self.wait_variable(self.sleep_current_var)
