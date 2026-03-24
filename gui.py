@@ -23,8 +23,7 @@ class App(Tk):
         self.stop_test_var = IntVar()
         self.print_label_var = IntVar()
         self.imu_instruction_var = IntVar()
-        self.sleep_current_var = IntVar()
-        self.sleep_current_skipped = False
+        self.sleep_current_var = IntVar(value=0)
         self.restart_fixture_var = IntVar()
         self.reboot_pi_var = IntVar()
         self.ble_retry_var = IntVar()
@@ -119,7 +118,6 @@ class App(Tk):
     
     # Set colour indicators to to white at start of test
     def reset_indicators(self):
-        self.sleep_current_skipped = False
         for test_number in range(10):
             self.frame.grid_slaves(column=1, row=test_number+1)[0].destroy()
             self.__create_circle(column=1, row=test_number+1, color=self.white)
@@ -241,48 +239,56 @@ class App(Tk):
         self.imu_instruction_var.set(0)
         self.wait_variable(self.imu_instruction_var)
 
-    # Sleep current test instructions
-    def sleep_current_window(self, allow_skip: bool = False):
+    # Sleep current test instructions — returns 1 (OK) or 2 (Skip prod flash + sleep test)
+    def sleep_current_window(self) -> int:
         popup = Toplevel(padx=20, pady=20)
         popup.protocol("WM_DELETE_WINDOW", self.disable_event)
-
-        self.sleep_current_skipped = False
+        popup.transient(self)
+        try:
+            popup.grab_set()
+        except TclError:
+            pass
 
         def acknowledge():
             self.sleep_current_var.set(1)
+            try:
+                popup.grab_release()
+            except TclError:
+                pass
             popup.destroy()
-            return
 
         def skip_sleep_current():
-            self.sleep_current_skipped = True
-            self.sleep_current_var.set(1)
+            self.sleep_current_var.set(2)
+            try:
+                popup.grab_release()
+            except TclError:
+                pass
             popup.destroy()
-            return
 
-        popup.title("Sleep Current Test Instructions")
+        popup.title("Sleep Current Test — production flash and measurement")
 
         msg = (
             "SLEEP CURRENT TEST:\n\n"
             "1. Disconnect the debugger cable from the Bolt PCBA.\n"
             "2. Disconnect the Bolt USB cable from the Raspberry Pi.\n"
             "3. Ensure the PPK2 alligator clips remain connected to the Bolt.\n\n"
-            "Press OK once the connections are correct to begin the current measurement."
+            "OK — run production firmware flash, then sleep current measurement.\n"
+            "SKIP — skip both steps (marked passed/skipped; no flash or measurement)."
         )
-        if allow_skip:
-            msg += "\n\nOr press SKIP to record this step as skipped (not measured)."
 
         label = ttk.Label(popup, text=msg, anchor=W, justify=LEFT)
         label.config(font=("TkFixedFont", 14))
         ok_button = ttk.Button(popup, text="OK", command=acknowledge)
+        skip_button = ttk.Button(popup, text="SKIP", command=skip_sleep_current)
 
-        label.grid(column=0, row=0, columnspan=2 if allow_skip else 1, padx=10, pady=10)
-        ok_button.grid(column=0, row=1, padx=10, pady=10)
-        if allow_skip:
-            skip_button = ttk.Button(popup, text="SKIP", command=skip_sleep_current)
-            skip_button.grid(column=1, row=1, padx=10, pady=10)
+        label.grid(column=0, row=0, columnspan=2, padx=10, pady=10)
+        ok_button.grid(column=0, row=1, padx=10, pady=10, sticky=E)
+        skip_button.grid(column=1, row=1, padx=10, pady=10, sticky=W)
 
         self.sleep_current_var.set(0)
         self.wait_variable(self.sleep_current_var)
+        self.update_idletasks()
+        return int(self.sleep_current_var.get())
 
     # USB re‑plug instructions after flashing test firmware
     def usb_replug_window(self):

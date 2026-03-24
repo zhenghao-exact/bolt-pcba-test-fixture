@@ -1083,29 +1083,28 @@ def run_bolt_test(app: gui.App) -> BoltTest:
             return test
         app.update_test_indicator(7, True)
 
-        # Indicator 8: flash production firmware.
-        app.sleep_current_window()
-        if not test.flash_production_firmware():
-            app.update_test_indicator(8, False)
-            return test
-        app.update_test_indicator(8, True)
-        time.sleep(5)
-
-        # Indicator 9: sleep current test.
-        app.sleep_current_window(allow_skip=True)
-        if app.sleep_current_skipped:
-            print("Sleep current: SKIPPED by operator (not measured).")
+        # Indicator 8 + 9: gate — production flash + sleep current (or skip both)
+        sleep_current_choice = app.sleep_current_window()
+        if sleep_current_choice == 2:
+            print("Operator skipped production flash and sleep current test.")
+            test.tests["flash_production_fw"] = True
             test.tests["sleep_current"] = True
+            test.measurements["sleep_current_ua"] = "SKIPPED"
             test.measurements["sleep_current_skipped"] = True
-            test.measurements["sleep_current_ua"] = None
             app.update_test_indicator(8, True)
             app.update_test_indicator(9, True)
+            upload_results.mark_skipped("sleep current flow skipped by operator")
             sleep_test_result = True
         else:
+            if not test.flash_production_firmware():
+                app.update_test_indicator(8, False)
+                return test
+            app.update_test_indicator(8, True)
+            time.sleep(5)
             sleep_test_result = test.run_sleep_current_test()
 
         # Check for abnormal PPK2 readings (fixture issue, not board failure)
-        if test.ppk2_sleep_error:
+        if test.ppk2_sleep_error and sleep_current_choice != 2:
             error_count = get_ppk2_error_count()
             print(f"PPK2 error: abnormal reading detected, error count: {error_count}")
             

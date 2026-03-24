@@ -33,6 +33,20 @@ fixture_id = 1
 # Current FW version
 latest_fw_version = ""
 
+# When True, next upload_to_drive() is a no-op (e.g. operator skipped prod flash + sleep flow)
+skip_next_upload = False
+
+
+def mark_skipped(reason: str = "") -> None:
+    """Mark the next upload_to_drive() call as skipped (no Google Sheet sync)."""
+    global skip_next_upload
+    skip_next_upload = True
+    if reason:
+        print(f"Upload results marked skipped: {reason}")
+    else:
+        print("Upload results marked skipped.")
+
+
 # Get month and year for data storage
 date = datetime.date.today()
 year = date.year
@@ -132,16 +146,20 @@ def update_sheet_on_drive(sheets_service, sheet_id):
 
 def upload_to_drive():
     """
-    Sync local fiscal-year CSV to Google Sheets. Rows are produced by csv_manager;
-    the Sleep Current Test column may be True, False, or 'skipped' when the
-    operator skipped sleep measurement in the GUI.
+    Sync local fiscal-year CSV to Google Sheets. Rows are produced by csv_manager.
+    If mark_skipped() was called for this run, skips the sync (CSV may still be written locally).
     """
+    global skip_next_upload
+    if skip_next_upload:
+        print("Upload to drive skipped for this run.")
+        skip_next_upload = False
+        return True
     try:
         sheet_service, drive_service = authenticate()
         update_sheet_on_drive(sheet_service, json_data["fixtures"][fixture_id-1]["drive_id"])
     except:
         print("Failed to update sheet on drive.")
-        
+
     return True
 
 def check_for_fw():

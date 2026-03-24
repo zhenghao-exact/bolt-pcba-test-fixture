@@ -64,12 +64,12 @@ def assemble_row(results: dict, measurements: dict, user: str, fixture: int):
     csv_row.append(measurements.get("adc_temp_4k99_measured_c"))  # Temp 4.99k (°C)
     csv_row.append(measurements.get("adc_temp_2k2_measured_c"))  # Temp 2.2k (°C)
     
-    # Sleep Current (column shows "skipped" when operator skipped measurement in GUI)
-    if measurements.get("sleep_current_skipped"):
+    # Sleep Current (column shows "skipped" when operator skipped prod flash + sleep in GUI)
+    if measurements.get("sleep_current_skipped") or measurements.get("sleep_current_ua") == "SKIPPED":
         csv_row.append("skipped")
     else:
         csv_row.append(results.get("sleep_current", False))
-    csv_row.append(measurements.get("sleep_current_ua"))  # Sleep Current (uA)
+    csv_row.append(measurements.get("sleep_current_ua"))  # Sleep Current (uA), may be "SKIPPED"
     
     # Supply Voltage (fixed 3.3V)
     csv_row.append(measurements.get("supply_voltage_v", 3.3))
