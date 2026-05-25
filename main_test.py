@@ -1033,18 +1033,12 @@ def run_bolt_test_raw_headless() -> BoltTest:
     Raw provisioning sequence: flash test fw -> open serial -> write_id -> flash prod fw.
 
     No IMU, BLE, analog calibration, or sleep current. No CSV write, no label print.
+    PPK2 is optional in this mode; any PPK2 failure is logged and ignored.
     """
     test = BoltTest()
     start_time = time.time()
 
     try:
-        try:
-            ppk2.toggle_DUT_power_OFF()
-            print("USB: ensuring PPK2 power is OFF before baseline port capture")
-            time.sleep(0.5)
-        except Exception as exc:
-            print(f"USB: warning - failed to turn off PPK2 power: {exc}")
-
         test._capture_baseline_ports()
         test.measurements["test_ID"] = int(start_time)
 
@@ -1324,10 +1318,12 @@ def main() -> None:
 
     # Basic PPK2 initialisation; if no PPK2 is connected this will just log
     # and return 0. Current‑measurement tests can be added later.
-    try:
-        ppk2.setup_ppk()
-    except Exception as exc:
-        print(f"PPK2 setup failed (non‑fatal during development): {exc}")
+    # RAW mode skips PPK2 init entirely — provisioning works on bench power / J-Link.
+    if not raw_mode:
+        try:
+            ppk2.setup_ppk()
+        except Exception as exc:
+            print(f"PPK2 setup failed (non‑fatal during development): {exc}")
 
     # Run a single headless test cycle
     print("=" * 60)
@@ -1349,12 +1345,13 @@ def main() -> None:
     else:
         bolt_test = run_bolt_test_headless(prod_mode=prod_mode)
 
-    # After test cycle, turn off DUT power from PPK2
-    try:
-        ppk2.toggle_DUT_power_OFF()
-        print("DUT power turned OFF")
-    except Exception:
-        pass
+    # After test cycle, turn off DUT power from PPK2 (skipped in RAW mode).
+    if not raw_mode:
+        try:
+            ppk2.toggle_DUT_power_OFF()
+            print("DUT power turned OFF")
+        except Exception:
+            pass
 
     # Print final summary
     print("=" * 60)
