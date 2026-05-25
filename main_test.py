@@ -826,11 +826,26 @@ def prompt_for_bolt_qr(app: gui.App) -> str:
     return qr_payload
 
 
+def _expand_short_bolt_id(raw: str) -> str:
+    """Expand short numeric input (e.g. '181') to full format 'Bolt_30000181'.
+
+    Mirrors gui.py:expand_short_bolt_id so headless input behaves identically to GUI.
+    """
+    s = raw.strip()
+    if s.isdigit() and 1 <= len(s) <= 3:
+        return f"Bolt_30000{s.zfill(3)}"
+    return s
+
+
 def prompt_for_bolt_qr_headless() -> str:
     """
     Prompt for Bolt QR string via command line input (headless mode).
+
+    Accepts either a full QR payload or a short numeric ID (1-3 digits),
+    which is expanded to 'Bolt_30000NNN'.
     """
-    qr_payload = input("Enter Bolt QR code: ").strip()
+    raw = input("Enter Bolt QR code (or short ID, e.g. '166'): ").strip()
+    qr_payload = _expand_short_bolt_id(raw)
     print(f"Scanned Bolt QR: {qr_payload}")
     return qr_payload
 
