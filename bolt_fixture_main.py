@@ -21,8 +21,8 @@ from serial import SerialException  # type: ignore[import-not-found]
 # Paths to firmware images on the Pi. Adjust these to match the Bolt build
 # output and repository layout on the production fixture.
 FW_FOLDER_PATH = "/home/boltfixturepi/bolt-pcba-test-fixture/fw"
-TEST_FW_FILENAME = "bolt_test_fw.hex"
-PRODUCTION_FW_FILENAME = "bolt_v0.5.0-99de3f6.hex"
+TEST_FW_FILENAME = "bolt-test-fw-060rc.hex"
+PRODUCTION_FW_FILENAME = "bolt-prod-fw-060rc.hex"
 
 tests_template: Dict[str, Any] = {
     "qr_scan": False,

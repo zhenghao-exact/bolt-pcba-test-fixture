@@ -21,8 +21,8 @@ from serial import SerialException  # type: ignore[import-not-found]
 # Paths to firmware images on the Pi. Must match bolt_fixture_main.py so flash
 # works identically in both GUI and headless modes.
 FW_FOLDER_PATH = "/home/boltfixturepi/bolt-pcba-test-fixture/fw"
-TEST_FW_FILENAME = "bolt_test_fw.hex"
-PRODUCTION_FW_FILENAME = "bolt_v0.5.0-99de3f6.hex"
+TEST_FW_FILENAME = "bolt-test-fw-060rc.hex"
+PRODUCTION_FW_FILENAME = "bolt-prod-fw-060rc.hex"
 
 # Feature flag to enable/disable BLE test
 # Set to True to enable BLE testing, False to skip (test will always pass)
