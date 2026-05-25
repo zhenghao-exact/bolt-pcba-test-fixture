@@ -1028,6 +1028,88 @@ def run_flash_current_headless() -> BoltTest:
     return test
 
 
+def run_bolt_test_raw_headless() -> BoltTest:
+    """
+    Raw provisioning sequence: flash test fw -> open serial -> write_id -> flash prod fw.
+
+    No IMU, BLE, analog calibration, or sleep current. No CSV write, no label print.
+    """
+    test = BoltTest()
+    start_time = time.time()
+
+    try:
+        try:
+            ppk2.toggle_DUT_power_OFF()
+            print("USB: ensuring PPK2 power is OFF before baseline port capture")
+            time.sleep(0.5)
+        except Exception as exc:
+            print(f"USB: warning - failed to turn off PPK2 power: {exc}")
+
+        test._capture_baseline_ports()
+        test.measurements["test_ID"] = int(start_time)
+
+        print("Step 1: Bolt ID input")
+        qr_payload = prompt_for_bolt_qr_headless()
+        if not qr_payload:
+            print("Bolt ID input: no data received; aborting.")
+            test.failure = True
+            return test
+        if not test.set_bolt_id_from_qr(qr_payload):
+            print("Bolt ID input: failed to parse Bolt ID")
+            return test
+        print("Step 1: Bolt ID input - PASSED")
+
+        print("Step 2: Flash test firmware")
+        if not test.flash_test_firmware():
+            print("Step 2: Flash test firmware - FAILED")
+            return test
+        print("Step 2: Flash test firmware - PASSED")
+
+        print("USB: issuing nrfjprog --reset to trigger USB enumeration...")
+        try:
+            result = subprocess.run(
+                ["nrfjprog", "--reset"],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+            )
+            if result.returncode == 0:
+                print("USB: nrfjprog --reset completed successfully")
+                time.sleep(1.0)
+            else:
+                print(f"USB: nrfjprog --reset failed with return code {result.returncode}")
+                print(f"USB: stderr: {result.stderr}")
+        except subprocess.TimeoutExpired:
+            print("USB: nrfjprog --reset timed out after 10 seconds")
+        except Exception as exc:
+            print(f"USB: error running nrfjprog --reset: {exc}")
+
+        print("Step 3: USB connection")
+        if not test.open_serial_port():
+            print("Step 3: USB connection - FAILED")
+            return test
+        print("Step 3: USB connection - PASSED")
+        time.sleep(6.0)
+
+        print("Step 4: Set serial on DUT")
+        if not test.program_serial_on_dut():
+            print("Step 4: Set serial on DUT - FAILED")
+            return test
+        print("Step 4: Set serial on DUT - PASSED")
+
+        print("Step 5: Flash production firmware")
+        if not test.flash_production_firmware():
+            print("Step 5: Flash production firmware - FAILED")
+            return test
+        print("Step 5: Flash production firmware - PASSED")
+
+        test.tests["final"] = True
+    finally:
+        print(f"Time to complete RAW sequence: {time.time() - start_time:.2f}s")
+
+    return test
+
+
 def run_bolt_test_headless(prod_mode: bool = False) -> BoltTest:
     """
     Run Bolt test sequence in headless mode (no GUI).
@@ -1222,20 +1304,24 @@ def main() -> None:
         python main_test.py          # Default mode: auto-passes production tests
         python main_test.py prod     # Production mode: runs real production tests
         python main_test.py flash_current  # Flash production + run sleep current only
+        python main_test.py --RAW    # Raw provisioning: flash test fw, write_id, flash prod fw
     """
     # Parse command line arguments
     prod_mode = False
     flash_current_mode = False
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "prod":
+    raw_mode = False
+    for arg in sys.argv[1:]:
+        if arg == "prod":
             prod_mode = True
-        elif sys.argv[1] == "flash_current":
+        elif arg == "flash_current":
             flash_current_mode = True
+        elif arg == "--RAW":
+            raw_mode = True
         else:
-            print(f"Unknown argument: {sys.argv[1]}")
-            print("Usage: python main_test.py [prod | flash_current]")
+            print(f"Unknown argument: {arg}")
+            print("Usage: python main_test.py [prod | flash_current | --RAW]")
             sys.exit(1)
-    
+
     # Basic PPK2 initialisation; if no PPK2 is connected this will just log
     # and return 0. Current‑measurement tests can be added later.
     try:
@@ -1246,10 +1332,19 @@ def main() -> None:
     # Run a single headless test cycle
     print("=" * 60)
     print("Bolt PCBA Test Fixture - Headless Mode")
-    mode_str = "flash_current" if flash_current_mode else ("prod" if prod_mode else "default")
+    if raw_mode:
+        mode_str = "raw"
+    elif flash_current_mode:
+        mode_str = "flash_current"
+    elif prod_mode:
+        mode_str = "prod"
+    else:
+        mode_str = "default"
     print(f"Mode: {mode_str}")
     print("=" * 60)
-    if flash_current_mode:
+    if raw_mode:
+        bolt_test = run_bolt_test_raw_headless()
+    elif flash_current_mode:
         bolt_test = run_flash_current_headless()
     else:
         bolt_test = run_bolt_test_headless(prod_mode=prod_mode)
