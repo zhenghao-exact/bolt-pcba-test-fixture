@@ -76,6 +76,8 @@ class BoltTest:
         self.failure = False
         self.baseline_ports: set[str] = set()
         self.dut_serial_port: Optional[str] = None
+        # When True, skip all PPK2 interactions inside test methods (used by --RAW).
+        self.raw_mode: bool = False
 
     # --- Utility helpers -------------------------------------------------
 
@@ -295,13 +297,14 @@ class BoltTest:
     def flash_test_firmware(self) -> bool:
         fw_path = os.path.join(FW_FOLDER_PATH, TEST_FW_FILENAME)
         # Ensure DUT is powered from PPK2 before flashing.
-        try:
-            ppk2.set_to_source_mode()
-            time.sleep(0.2)
-        except Exception:
-            # If PPK2 is not available, continue and let flashing fail if DUT
-            # truly has no power.
-            pass
+        if not self.raw_mode:
+            try:
+                ppk2.set_to_source_mode()
+                time.sleep(0.2)
+            except Exception:
+                # If PPK2 is not available, continue and let flashing fail if DUT
+                # truly has no power.
+                pass
 
         self.tests["flash_test_fw"] = nrfjprog.flash_FW(fw_path)
         if not self.tests["flash_test_fw"]:
@@ -310,12 +313,13 @@ class BoltTest:
 
     def flash_production_firmware(self) -> bool:
         fw_path = os.path.join(FW_FOLDER_PATH, PRODUCTION_FW_FILENAME)
-        try:
-            ppk2.set_to_source_mode()
-            ppk2.toggle_DUT_power_ON()
-            time.sleep(0.2)
-        except Exception:
-            pass
+        if not self.raw_mode:
+            try:
+                ppk2.set_to_source_mode()
+                ppk2.toggle_DUT_power_ON()
+                time.sleep(0.2)
+            except Exception:
+                pass
 
         self.tests["flash_production_fw"] = nrfjprog.flash_FW(fw_path)
         if not self.tests["flash_production_fw"]:
@@ -1033,9 +1037,10 @@ def run_bolt_test_raw_headless() -> BoltTest:
     Raw provisioning sequence: flash test fw -> open serial -> write_id -> flash prod fw.
 
     No IMU, BLE, analog calibration, or sleep current. No CSV write, no label print.
-    PPK2 is optional in this mode; any PPK2 failure is logged and ignored.
+    PPK2 is optional in this mode; PPK2 calls inside flash methods are skipped.
     """
     test = BoltTest()
+    test.raw_mode = True
     start_time = time.time()
 
     try:
