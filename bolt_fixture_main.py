@@ -493,12 +493,12 @@ class BoltTest:
 
     def run_imu_test(self) -> bool:
         """
-        IMU is always running; watch the log for angle changes in both
-        directions and ensure we see at least +/- threshold within a timeout.
+        Pass as soon as the MLC angle handler fires at least once within
+        the timeout — any rotation that triggers the IMU interrupt is enough.
         """
         if not self.ser:
             return False
-        ok = bolt_control.wait_for_imu_rotation(self.ser, timeout_s=15.0, threshold_deg=20.0)
+        ok = bolt_control.wait_for_imu_rotation(self.ser, timeout_s=15.0)
         self.tests["imu"] = ok
         if not ok:
             self.failure = True

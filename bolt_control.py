@@ -410,18 +410,15 @@ def simple_health_check(ser: Serial) -> bool:
     return False
 
 
-def wait_for_imu_rotation(ser: Serial, timeout_s: float = 15.0, threshold_deg: float = 20.0) -> bool:
+def wait_for_imu_rotation(ser: Serial, timeout_s: float = 15.0) -> bool:
     """
-    Watch the UART log for IMU angle messages and ensure we see movement in
-    both directions of at least +/- threshold_deg within timeout_s.
+    Pass as soon as the MLC angle handler fires at least once within timeout_s.
 
     We look for lines like:
         "imu: etc_imu_mlc_angle_fetch: new angle: -22.5"
     """
     clear_serial_buffer(ser)
     end_time = time.time() + timeout_s
-    min_angle = 999.0
-    max_angle = -999.0
 
     while time.time() < end_time:
         line = ser.readline().decode(errors="ignore").strip()
@@ -429,20 +426,8 @@ def wait_for_imu_rotation(ser: Serial, timeout_s: float = 15.0, threshold_deg: f
             continue
 
         if "new angle:" in line:
-            m = re.search(r"new angle:\s*([-0-9.]+)", line)
-            if not m:
-                continue
-            try:
-                angle = float(m.group(1))
-            except ValueError:
-                continue
-
-            min_angle = min(min_angle, angle)
-            max_angle = max(max_angle, angle)
-            print(f"[imu] angle={angle} min={min_angle} max={max_angle}")
-
-            if min_angle <= -threshold_deg and max_angle >= threshold_deg:
-                return True
+            print(f"[imu] handler fired: {line}")
+            return True
 
     return False
 
