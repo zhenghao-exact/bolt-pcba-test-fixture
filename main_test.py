@@ -577,52 +577,6 @@ class BoltTest:
 
     # --- Analog calibration -----------------------------------------------
 
-    def _set_adc_comp_rr(self) -> bool:
-        """
-        Set the Rr value for ADC compensation by reading the ADC compensation channel.
-        
-        This must be called before running analog calibration to ensure proper
-        ADC offset compensation. Reads the ADC_CAL_COMP_IDX channel and stores
-        the value in settings.
-        
-        Returns:
-            True if Rr was set successfully, False otherwise
-        """
-        if not self.ser:
-            return False
-        
-        print("Analog cal: setting Rr value for ADC compensation...")
-        time.sleep(2.0)
-        if not bolt_control.send_shell_command(self.ser, "etc_adc_comp rr_set"):
-            print("Analog cal: failed to send etc_adc_comp rr_set command")
-            return False
-        
-        # Read response and check for success (8s for 115200 baud - device may reboot)
-        end_time = time.time() + 8.0
-        saw_success = False
-        while time.time() < end_time:
-            try:
-                line = self.ser.readline().decode(errors="ignore").strip()
-            except (SerialException, OSError) as exc:
-                print(f"Analog cal: serial error while waiting for rr_set response: {exc}")
-                return False
-            if not line:
-                continue
-            print(f"[adc_comp_rr] {line}")
-            if "Rr set to" in line:
-                saw_success = True
-                break
-            if "Failed" in line or "Error" in line or "not supported" in line:
-                print(f"Analog cal: etc_adc_comp rr_set failed: {line}")
-                return False
-        
-        if saw_success:
-            print("Analog cal: Rr value set successfully")
-            return True
-        else:
-            print("Analog cal: timeout waiting for etc_adc_comp rr_set response")
-            return False
-
     def run_analog_calibration(self) -> bool:
         """
         Run the analog calibration sequence by calling calibraor_test.py functions directly.
@@ -632,42 +586,46 @@ class BoltTest:
           - HIGH (270 kΩ) calibration
           - Reference value programming
           - Verification at multiple temperature points
-        
+
         Captures calibration parameters and temperature readings for CSV reporting.
-        
-        NOTE: This method calls _set_adc_comp_rr() first to set the Rr value for
-        ADC compensation before running calibration.
+
+        Note: This method re-detects the serial port before calibration, as a PPK2
+        power-cycle may have caused the DUT UART to re-enumerate as a different ttyUSBx port.
         """
-        if not self.ser:
-            self.tests["analog"] = False
-            self.failure = True
-            return False
-
         if not self.reopen_serial_port_for_calibration(timeout_s=10.0):
+            print("Analog cal: failed to re-detect serial port before calibration")
             self.tests["analog"] = False
             self.failure = True
             return False
 
-        rr_ok = False
-        try:
-            rr_ok = self._set_adc_comp_rr()
-        except (SerialException, OSError) as exc:
-            print(f"Analog cal: serial error during rr_set: {exc}")
-            rr_ok = False
+        def _w1_prep() -> bool:
+            bolt_control.clear_serial_buffer(self.ser)
+            time.sleep(2.0)
+            if not bolt_control.send_shell_command(self.ser, "w1 slpz 0"):
+                print("Analog cal: failed to send w1 slpz 0 command")
+                return False
+            time.sleep(0.1)
+            bolt_control.clear_serial_buffer(self.ser)
+            return True
 
-        if not rr_ok:
-            print("Analog cal: rr_set failed; retrying once after UART reopen...")
+        w1_ok = False
+        try:
+            w1_ok = _w1_prep()
+        except (SerialException, OSError) as exc:
+            print(f"Analog cal: serial error during w1 prep: {exc}")
+            w1_ok = False
+
+        if not w1_ok:
+            print("Analog cal: retrying w1 prep once after UART reopen...")
             if self.reopen_serial_port_for_calibration(timeout_s=10.0):
                 try:
-                    rr_ok = self._set_adc_comp_rr()
+                    w1_ok = _w1_prep()
                 except (SerialException, OSError) as exc:
-                    print(f"Analog cal: serial error during rr_set retry: {exc}")
-                    rr_ok = False
-            if not rr_ok:
-                print("Analog cal: warning - failed to set Rr value, continuing anyway")
+                    print(f"Analog cal: serial error during w1 prep retry: {exc}")
+            if not w1_ok:
+                print("Analog cal: warning - w1 prep incomplete, continuing anyway")
 
         # Import calibration functions directly instead of using subprocess
-        # This allows us to capture the returned calibration data
         try:
             from calibraor_test import run_full_analog_calibration, CALIBRATION_MODE_FAST
         except ImportError:
@@ -704,7 +662,7 @@ class BoltTest:
                 self.measurements["adc_temp_10k_measured_c"] = cal_result.get("temp_10k")
                 self.measurements["adc_temp_4k99_measured_c"] = cal_result.get("temp_4k99")
                 self.measurements["adc_temp_2k2_measured_c"] = cal_result.get("temp_2k2")
-                
+
                 print("Analog cal: calibration completed successfully")
                 print(f"  Offset: {cal_result.get('offset_raw')}")
                 print(f"  High: {cal_result.get('high_raw')}")
@@ -713,7 +671,7 @@ class BoltTest:
                 print(f"  Temp 10k: {cal_result.get('temp_10k')} °C")
                 print(f"  Temp 4.99k: {cal_result.get('temp_4k99')} °C")
                 print(f"  Temp 2.2k: {cal_result.get('temp_2k2')} °C")
-                
+
                 self.tests["analog"] = True
                 return True
             else:
