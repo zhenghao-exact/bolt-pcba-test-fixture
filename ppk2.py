@@ -83,8 +83,61 @@ def reconnect_to_ppk():
         print("Reconnected to PPK2 device: " + str(ppk2_device))
         return True
     else:
-        
+
         return False
+
+
+def restart_ppk2() -> bool:
+    """
+    Fully tear down the current PPK2 handle, wait 1 s, then re-discover and
+    re-initialise the device. Used to recover from abnormal sleep-current
+    readings after the operator has unplugged/re-plugged the PPK2.
+
+    Returns True if the device is back up and measuring, False otherwise.
+    """
+    global ppk2_device, device_available
+
+    # Best-effort shutdown of the existing handle. The PPK2 may already be
+    # unplugged, in which case these calls raise and we just press on.
+    if ppk2_device is not None:
+        for action in (
+            lambda: ppk2_device.stop_measuring(),
+            lambda: ppk2_device.toggle_DUT_power("OFF"),
+            lambda: ppk2_device.ser.close(),
+        ):
+            try:
+                action()
+            except Exception as exc:
+                print(f"PPK2 restart: ignoring teardown error: {exc}")
+
+    ppk2_device = None
+    device_available = False
+
+    time.sleep(1.0)
+
+    new_devices = PPK2_API.list_devices()
+    new_devices = _sort_devices_by_port(new_devices)
+    print("PPK2 Devices (after restart): " + str(new_devices))
+    if len(new_devices) not in (1, 2):
+        print("PPK2 restart: no device found after re-discovery")
+        return False
+
+    try:
+        ppk2_device = PPK2_API(new_devices[0], timeout=1, write_timeout=1)
+        ppk2_device.get_modifiers()
+        ppk2_device.use_source_meter()
+        ppk2_device.set_source_voltage(3300)
+        ppk2_device.toggle_DUT_power("ON")
+        ppk2_device.start_measuring()
+    except Exception as exc:
+        print(f"PPK2 restart: re-init failed: {exc}")
+        ppk2_device = None
+        device_available = False
+        return False
+
+    device_available = True
+    print("PPK2 restart: device re-initialised and measuring")
+    return True
     
 def toggle_DUT_power_ON():
     ppk2_device.toggle_DUT_power("ON")

@@ -837,6 +837,9 @@ class BoltTest:
 
         A CSV report with timestamped current measurements is generated.
         """
+        # Reset abnormal-reading flag for this attempt so the retry loop in
+        # run_bolt_test can detect a fresh PPK2 fault.
+        self.ppk2_sleep_error = False
         print("Sleep current: power cycling DUT via PPK2...")
         try:
             ppk2.toggle_DUT_power_OFF()
@@ -913,12 +916,9 @@ class BoltTest:
                     print(f"Sleep current: ABNORMAL PPK2 READING detected: {avg_ua:.2f} uA (likely fixture issue, not board failure)")
                     self.ppk2_sleep_error = True
                     self.measurements["sleep_current_ua"] = avg_ua
-                    # Increment persistent error counter
-                    error_count = get_ppk2_error_count() + 1
-                    set_ppk2_error_count(error_count)
-                    print(f"Sleep current: PPK2 error count is now {error_count}")
-                    # Do NOT mark board as failed - this is a fixture issue
-                    # Return False to indicate test could not complete, but failure flag is not set
+                    # Do NOT mark board as failed - this is a fixture issue.
+                    # The persistent error counter is bumped by the retry loop in
+                    # run_bolt_test once all retries are exhausted.
                     return False
                 
                 if avg_ua < 120.0:
@@ -955,12 +955,9 @@ class BoltTest:
         if avg_ua > 1000.0 or avg_ua < 5.0:
             print(f"Sleep current: ABNORMAL PPK2 READING detected: {avg_ua:.2f} uA (likely fixture issue, not board failure)")
             self.ppk2_sleep_error = True
-            # Increment persistent error counter
-            error_count = get_ppk2_error_count() + 1
-            set_ppk2_error_count(error_count)
-            print(f"Sleep current: PPK2 error count is now {error_count}")
-            # Do NOT mark board as failed - this is a fixture issue
-            # Return False to indicate test could not complete, but failure flag is not set
+            # Do NOT mark board as failed - this is a fixture issue.
+            # The persistent error counter is bumped by the retry loop in
+            # run_bolt_test once all retries are exhausted.
             return False
 
         # Generate CSV report
@@ -1133,10 +1130,27 @@ def run_bolt_test(app: gui.App) -> BoltTest:
             app.ready_for_sleep_current_window()
             sleep_test_result = test.run_sleep_current_test()
 
+            # Retry up to 3 times on abnormal PPK2 readings. Each retry asks the
+            # operator to power-cycle the PPK2 (unplug/re-plug USB) and then
+            # tears the device handle down and brings it back up before the
+            # next sleep current measurement.
+            max_ppk2_retries = 3
+            for retry_idx in range(1, max_ppk2_retries + 1):
+                if not test.ppk2_sleep_error:
+                    break
+                print(f"Sleep current: abnormal PPK2 reading, retry {retry_idx}/{max_ppk2_retries}")
+                app.ppk2_retry_window(retry_idx, max_ppk2_retries)
+                if not ppk2.restart_ppk2():
+                    print("Sleep current: PPK2 restart failed; the next attempt will likely fail")
+                sleep_test_result = test.run_sleep_current_test()
+
         # Check for abnormal PPK2 readings (fixture issue, not board failure)
         if test.ppk2_sleep_error and sleep_current_choice != 2:
-            error_count = get_ppk2_error_count()
-            print(f"PPK2 error: abnormal reading detected, error count: {error_count}")
+            # All retries exhausted — bump the persistent counter once and
+            # escalate via the existing restart-fixture / reboot-Pi flow.
+            error_count = get_ppk2_error_count() + 1
+            set_ppk2_error_count(error_count)
+            print(f"PPK2 error: abnormal reading persisted after retries, error count: {error_count}")
             
             # Set indicator to red to show something went wrong, but clarify it's a fixture issue
             app.update_test_indicator(9, False)
