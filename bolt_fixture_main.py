@@ -601,42 +601,45 @@ class BoltTest:
                     pass
             return False, None
 
-    def run_ble_test(self) -> bool:
-        """
-        Test BLE functionality by first trying the standalone run_ble_test.py script
-        to collect RSSI measurements, with fallback to simple device presence scan.
-        
-        Behavior matrix:
-        - Script succeeds: Store median RSSI, set tests["ble"] = True
-        - Script fails + fallback succeeds: Set RSSI to None (reported as N/A in CSV), 
-          set tests["ble"] = True
-        - Both fail: Set tests["ble"] = False, RSSI remains None
-        """
-        bolt_id = self.measurements.get("bolt_id")
-        if not bolt_id:
-            return False
+    def _reset_dut_via_nrfjprog(self) -> None:
+        """Issue `nrfjprog --reset` and swallow any errors."""
+        print("BLE test: issuing nrfjprog --reset after BLE failure...")
+        try:
+            result = subprocess.run(
+                ["nrfjprog", "--reset"],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+            )
+            if result.returncode == 0:
+                print("BLE test: nrfjprog --reset completed successfully")
+            else:
+                print(f"BLE test: nrfjprog --reset failed with return code {result.returncode}")
+                print(f"BLE test: stderr: {result.stderr}")
+        except subprocess.TimeoutExpired:
+            print("BLE test: nrfjprog --reset timed out after 10 seconds")
+        except Exception as exc:
+            print(f"BLE test: error running nrfjprog --reset: {exc}")
 
-        # First, try the standalone BLE test script which collects RSSI measurements
-        # The script handles Bluetooth restart and device removal internally
+    def _attempt_ble_test(self, bolt_id: str) -> bool:
+        """
+        One BLE attempt: standalone script (with RSSI) then fallback presence
+        scan. Returns True on success and sets `tests["ble"]` /
+        `measurements["ble_rssi_median"]`. Does NOT update the persistent
+        counter, the first-failure flag, or run nrfjprog --reset — the retry
+        loop in run_ble_test handles those.
+        """
         script_ok, median_rssi = self._run_ble_test_script(bolt_id)
-        
         if script_ok and median_rssi is not None:
-            # Script succeeded and we have RSSI measurement
             self.measurements["ble_rssi_median"] = median_rssi
             self.tests["ble"] = True
-            # Reset BLE error counter on successful test
-            set_ble_error_count(0)
             print(f"BLE test: PASSED via standalone script - Median RSSI: {median_rssi} dBm")
             return True
-        
-        # Script failed, fall back to the original simple presence scan
+
         print("BLE test: standalone script failed, falling back to simple device presence scan...")
-        
-        # Restart bluetooth service before fallback BLE test
         print("BLE test: restarting bluetooth service for fallback scan...")
         process = None
         try:
-            # Use sudo -S to read password from stdin
             process = subprocess.Popen(
                 ["sudo", "-S", "systemctl", "restart", "bluetooth"],
                 stdin=subprocess.PIPE,
@@ -647,7 +650,6 @@ class BoltTest:
             stdout, stderr = process.communicate(input="123456\n", timeout=10.0)
             if process.returncode == 0:
                 print("BLE test: bluetooth service restarted successfully")
-                # Give bluetooth a moment to fully restart
                 time.sleep(2.0)
             else:
                 print(f"BLE test: bluetooth restart failed: {stderr}")
@@ -663,57 +665,61 @@ class BoltTest:
                 except Exception:
                     pass
 
-        # Simple scan for device presence (no connection, much faster)
-        ok = bolt_control.scan_for_ble_device(bolt_id, timeout_s=10.0)
-        if not ok:
-            self.tests["ble"] = False
-            # Check if this is the first BLE failure since last success
-            error_count = get_ble_error_count()
-            new_count = error_count + 1
-            set_ble_error_count(new_count)
-
-            if new_count == 1:
-                # First BLE failure: treat as transient condition, don't mark as board failure yet
-                self.ble_first_failure = True
-                print(f"BLE test: FIRST FAILURE detected (likely transient due to re-power/advertising name change)")
-                print(f"BLE test: will trigger test restart instead of marking board as failed")
-            else:
-                # Subsequent failure: normal board failure
-                self.failure = True
-
-            # On every BLE failure, reset the DUT via nrfjprog so the next attempt
-            # starts from a clean boot (advertising may have stalled or stack hung).
-            print("BLE test: issuing nrfjprog --reset after BLE failure...")
-            try:
-                result = subprocess.run(
-                    ["nrfjprog", "--reset"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10.0,
-                )
-                if result.returncode == 0:
-                    print("BLE test: nrfjprog --reset completed successfully")
-                    time.sleep(1.0)
-                else:
-                    print(f"BLE test: nrfjprog --reset failed with return code {result.returncode}")
-                    print(f"BLE test: stderr: {result.stderr}")
-            except subprocess.TimeoutExpired:
-                print("BLE test: nrfjprog --reset timed out after 10 seconds")
-            except Exception as exc:
-                print(f"BLE test: error running nrfjprog --reset: {exc}")
-
-            # Ensure RSSI is None when test fails
+        if bolt_control.scan_for_ble_device(bolt_id, timeout_s=10.0):
             self.measurements["ble_rssi_median"] = None
+            self.tests["ble"] = True
+            print("BLE test: PASSED via fallback scan (RSSI will be reported as N/A)")
+            return True
+
+        return False
+
+    def run_ble_test(self) -> bool:
+        """
+        Run the BLE test with up to 3 retries on failure. Each failed attempt
+        issues nrfjprog --reset and waits 1 s before the next attempt so the
+        DUT comes back from a clean boot (advertising may have stalled or the
+        BLE stack may have hung).
+
+        Behavior matrix per attempt:
+        - Script succeeds: Store median RSSI, pass.
+        - Script fails + fallback presence scan succeeds: RSSI = None, pass.
+        - Both fail: try again, up to max_attempts.
+        """
+        bolt_id = self.measurements.get("bolt_id")
+        if not bolt_id:
             return False
-        
-        # Fallback scan succeeded, but we don't have RSSI from the script
-        # Set RSSI to None so CSV reports it as N/A
-        # Reset BLE error counter on successful test
-        set_ble_error_count(0)
+
+        max_attempts = 4  # 1 initial + 3 retries
+        for attempt in range(1, max_attempts + 1):
+            if self._attempt_ble_test(bolt_id):
+                set_ble_error_count(0)
+                return True
+
+            if attempt < max_attempts:
+                print(f"BLE test: attempt {attempt}/{max_attempts} failed; resetting DUT and retrying")
+                self._reset_dut_via_nrfjprog()
+                time.sleep(1.0)
+
+        # All attempts failed — finalise board state.
+        print(f"BLE test: all {max_attempts} attempts failed")
+        self.tests["ble"] = False
         self.measurements["ble_rssi_median"] = None
-        self.tests["ble"] = True
-        print("BLE test: PASSED via fallback scan (RSSI will be reported as N/A)")
-        return True
+
+        error_count = get_ble_error_count()
+        new_count = error_count + 1
+        set_ble_error_count(new_count)
+
+        if new_count == 1:
+            self.ble_first_failure = True
+            print("BLE test: FIRST FAILURE detected (likely transient due to re-power/advertising name change)")
+            print("BLE test: will trigger test restart instead of marking board as failed")
+        else:
+            self.failure = True
+
+        # Final reset so the DUT is in a clean state for the operator's next
+        # action (manual retry or the next board).
+        self._reset_dut_via_nrfjprog()
+        return False
 
     # --- Analog calibration -----------------------------------------------
 
