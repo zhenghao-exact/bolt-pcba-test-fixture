@@ -16,7 +16,7 @@ if len(ppk2s_connected) == 1:
     print(f"Found PPK2 at {ppk2_port} with serial number {ppk2_serial}")
 
 
-ppk2_test = PPK2_API("/dev/ttyACM0", timeout=1, write_timeout=1, exclusive=True)
+ppk2_test = PPK2_API("/dev/ttyACM2", timeout=1, write_timeout=1, exclusive=True)
 ppk2_test.set_source_voltage(3300)
 
 ppk2_test.use_source_meter()  # set source meter mode

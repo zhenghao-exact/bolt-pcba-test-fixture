@@ -60,23 +60,31 @@ local_results_filepath = f"/home/boltfixturepi/Documents/bolt-pcba-test-fixture/
 
 # Open json file and get last year and drive file id
 with open("fixture_config.json", "r") as json_file:
-    data = json.load(json_file) 
-    
+    data = json.load(json_file)
+
+fixtures = data.get("fixtures", [])
+
+# Ensure the array includes at least fixture_id entries, filling missing ones with defaults.
+while len(fixtures) < fixture_id:
+    fixtures.append({
+        "fixture_id": len(fixtures) + 1,
+        "drive_id": "",
+        "year": year,
+        "rsrp": 0,
+    })
+
+# Safely normalize the selected fixture entry
+selected = fixtures[fixture_id - 1]
+selected.setdefault("fixture_id", fixture_id)
+selected.setdefault("drive_id", "")
+selected.setdefault("year", year)
+selected.setdefault("rsrp", 0)
+
 json_data = {
-    "fixtures" : [{
-        "fixture_id" : data["fixtures"][0]["fixture_id"],
-        "drive_id" : data["fixtures"][0]["drive_id"],
-        "year" : data["fixtures"][0]["year"],
-        "rsrp" : data["fixtures"][0]["rsrp"]
-    },{
-        "fixture_id" : data["fixtures"][1]["fixture_id"],
-        "drive_id" : data["fixtures"][1]["drive_id"],
-        "year" : data["fixtures"][1]["year"],
-        "rsrp" : data["fixtures"][1]["rsrp"]
-    }]
+    "fixtures": fixtures
 }
-    
-print(json_data)    
+
+print(json_data)
 
 def authenticate():
     credentials = service_account.Credentials.from_service_account_file(KEY_FILE, scopes=SCOPES)
