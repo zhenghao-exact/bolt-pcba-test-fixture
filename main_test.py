@@ -746,8 +746,8 @@ class BoltTest:
             # bursts in the tens of mA range, plus occasional negative readings
             # (PPK2 zero-offset noise / get_average_current sentinel). Neither
             # is representative of the DUT's sleep current.
-            if current_ua < 0:
-                print(f"Sleep current: dropping invalid sample: {current_ua:.2f} uA (< 0)")
+            if current_ua < 10.0:
+                print(f"Sleep current: dropping low sample: {current_ua:.2f} uA (< 10 uA)")
                 continue
             if current_ua > 1200.0:
                 print(f"Sleep current: dropping spike sample: {current_ua:.2f} uA (> 1200 uA)")
