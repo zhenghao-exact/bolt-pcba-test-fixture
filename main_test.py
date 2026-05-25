@@ -1032,6 +1032,23 @@ def run_flash_current_headless() -> BoltTest:
     return test
 
 
+def run_bolt_test_proda_headless() -> BoltTest:
+    """
+    Run only the sleep current test, nothing else.
+
+    Assumes the DUT is already provisioned with production firmware and
+    physically positioned with PPK2 as the only power source.
+    """
+    test = BoltTest()
+    test.measurements["bolt_id"] = "unknown"
+
+    print("Sleep current test (PRODA mode)")
+    sleep_ok = test.run_sleep_current_test()
+    test.tests["final"] = bool(sleep_ok)
+    test.failure = not test.tests["final"]
+    return test
+
+
 def run_bolt_test_raw_headless() -> BoltTest:
     """
     Raw provisioning sequence: flash test fw -> open serial -> write_id -> flash prod fw.
@@ -1304,11 +1321,13 @@ def main() -> None:
         python main_test.py prod     # Production mode: runs real production tests
         python main_test.py flash_current  # Flash production + run sleep current only
         python main_test.py --RAW    # Raw provisioning: flash test fw, write_id, flash prod fw
+        python main_test.py --PRODA  # Sleep current test only (DUT must already have prod fw)
     """
     # Parse command line arguments
     prod_mode = False
     flash_current_mode = False
     raw_mode = False
+    proda_mode = False
     for arg in sys.argv[1:]:
         if arg == "prod":
             prod_mode = True
@@ -1316,9 +1335,11 @@ def main() -> None:
             flash_current_mode = True
         elif arg == "--RAW":
             raw_mode = True
+        elif arg == "--PRODA":
+            proda_mode = True
         else:
             print(f"Unknown argument: {arg}")
-            print("Usage: python main_test.py [prod | flash_current | --RAW]")
+            print("Usage: python main_test.py [prod | flash_current | --RAW | --PRODA]")
             sys.exit(1)
 
     # Basic PPK2 initialisation; if no PPK2 is connected this will just log
@@ -1335,6 +1356,8 @@ def main() -> None:
     print("Bolt PCBA Test Fixture - Headless Mode")
     if raw_mode:
         mode_str = "raw"
+    elif proda_mode:
+        mode_str = "proda"
     elif flash_current_mode:
         mode_str = "flash_current"
     elif prod_mode:
@@ -1345,6 +1368,8 @@ def main() -> None:
     print("=" * 60)
     if raw_mode:
         bolt_test = run_bolt_test_raw_headless()
+    elif proda_mode:
+        bolt_test = run_bolt_test_proda_headless()
     elif flash_current_mode:
         bolt_test = run_flash_current_headless()
     else:
