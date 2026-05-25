@@ -27,6 +27,7 @@ class App(Tk):
         self.restart_fixture_var = IntVar()
         self.reboot_pi_var = IntVar()
         self.ble_retry_var = IntVar()
+        self.sleep_current_ready_var = IntVar()
 
         # self.attributes("-fullscreen", True)
         self.bind("<Escape>", self.end_fullscreen)
@@ -291,6 +292,37 @@ class App(Tk):
         return int(self.sleep_current_var.get())
 
     # USB re‑plug instructions after flashing test firmware
+    def ready_for_sleep_current_window(self):
+        """
+        Blocking popup shown after production firmware flash + reset.
+        Operator confirms the board is ready before sleep current measurement.
+        """
+        popup = Toplevel(padx=20, pady=20)
+        popup.protocol("WM_DELETE_WINDOW", self.disable_event)
+
+        def acknowledge():
+            self.sleep_current_ready_var.set(1)
+            popup.destroy()
+
+        popup.title("Ready for Sleep Current")
+
+        msg = (
+            "PRODUCTION FIRMWARE FLASHED\n\n"
+            "Please unplug the UART line and the flashing line,\n"
+            "then press OK to start the sleep current test."
+        )
+
+        label = ttk.Label(popup, text=msg, anchor=W, justify=LEFT)
+        label.config(font=("TkFixedFont", 14))
+        ok_button = ttk.Button(popup, text="OK", command=acknowledge)
+
+        label.grid(column=0, row=0, padx=10, pady=10)
+        ok_button.grid(column=0, row=1, padx=10, pady=10)
+
+        self.sleep_current_ready_var.set(0)
+        self.wait_variable(self.sleep_current_ready_var)
+
+
     def usb_replug_window(self):
         popup = Toplevel(padx=20, pady=20)
         popup.protocol("WM_DELETE_WINDOW", self.disable_event)

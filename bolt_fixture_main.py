@@ -1121,7 +1121,9 @@ def run_bolt_test(app: gui.App) -> BoltTest:
                 app.update_test_indicator(8, False)
                 return test
             app.update_test_indicator(8, True)
-            time.sleep(5)
+            # Production flash already issued nrfjprog --reset internally.
+            # Prompt operator to ready the board before sleep current measurement.
+            app.ready_for_sleep_current_window()
             sleep_test_result = test.run_sleep_current_test()
 
         # Check for abnormal PPK2 readings (fixture issue, not board failure)
