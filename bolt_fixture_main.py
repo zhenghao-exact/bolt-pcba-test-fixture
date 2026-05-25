@@ -1136,15 +1136,19 @@ def run_bolt_test(app: gui.App) -> BoltTest:
             app.ready_for_sleep_current_window()
             sleep_test_result = test.run_sleep_current_test()
 
-            # Retry up to 3 times on abnormal PPK2 readings. Each retry asks the
-            # operator to power-cycle the PPK2 (unplug/re-plug USB) and then
-            # tears the device handle down and brings it back up before the
-            # next sleep current measurement.
+            # Retry up to 3 times on any out-of-range sleep current result.
+            # Each retry asks the operator to power-cycle the PPK2 (unplug
+            # and re-plug USB) and then tears the device handle down and
+            # brings it back up before the next measurement. We retry on
+            # both abnormal-PPK2 readings (likely fixture fault) and normal
+            # over-threshold readings (could still be a flaky PPK2 reading
+            # — the operator gets to decide whether to bail out via Cancel
+            # on the fixture, or to keep retrying).
             max_ppk2_retries = 3
-            for retry_idx in range(1, max_ppk2_retries + 1):
-                if not test.ppk2_sleep_error:
-                    break
-                print(f"Sleep current: abnormal PPK2 reading, retry {retry_idx}/{max_ppk2_retries}")
+            retry_idx = 0
+            while not sleep_test_result and retry_idx < max_ppk2_retries:
+                retry_idx += 1
+                print(f"Sleep current: out-of-range result, retry {retry_idx}/{max_ppk2_retries}")
                 app.ppk2_retry_window(retry_idx, max_ppk2_retries)
                 if not ppk2.restart_ppk2():
                     print("Sleep current: PPK2 restart failed; the next attempt will likely fail")
