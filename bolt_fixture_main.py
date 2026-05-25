@@ -671,7 +671,7 @@ class BoltTest:
             error_count = get_ble_error_count()
             new_count = error_count + 1
             set_ble_error_count(new_count)
-            
+
             if new_count == 1:
                 # First BLE failure: treat as transient condition, don't mark as board failure yet
                 self.ble_first_failure = True
@@ -680,7 +680,28 @@ class BoltTest:
             else:
                 # Subsequent failure: normal board failure
                 self.failure = True
-            
+
+            # On every BLE failure, reset the DUT via nrfjprog so the next attempt
+            # starts from a clean boot (advertising may have stalled or stack hung).
+            print("BLE test: issuing nrfjprog --reset after BLE failure...")
+            try:
+                result = subprocess.run(
+                    ["nrfjprog", "--reset"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10.0,
+                )
+                if result.returncode == 0:
+                    print("BLE test: nrfjprog --reset completed successfully")
+                    time.sleep(1.0)
+                else:
+                    print(f"BLE test: nrfjprog --reset failed with return code {result.returncode}")
+                    print(f"BLE test: stderr: {result.stderr}")
+            except subprocess.TimeoutExpired:
+                print("BLE test: nrfjprog --reset timed out after 10 seconds")
+            except Exception as exc:
+                print(f"BLE test: error running nrfjprog --reset: {exc}")
+
             # Ensure RSSI is None when test fails
             self.measurements["ble_rssi_median"] = None
             return False
