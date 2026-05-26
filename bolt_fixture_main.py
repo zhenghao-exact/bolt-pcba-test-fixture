@@ -7,6 +7,46 @@ import re
 from datetime import datetime
 from typing import Dict, Any, Tuple, Optional
 
+
+# Always-on stdout tee. Mirrors every print() to log/app_<timestamp>.log so the
+# full startup transcript — including ppk2.py's import-time PPK2 discovery —
+# is preserved for postmortem analysis. Installed before any module that
+# prints at import time.
+class _PersistentTee:
+    def __init__(self, original) -> None:
+        self._original = original
+        self._sinks: list = []
+
+    def add_sink(self, sink) -> None:
+        self._sinks.append(sink)
+
+    def write(self, s: str) -> int:
+        self._original.write(s)
+        for sink in self._sinks:
+            try:
+                sink(s)
+            except Exception:
+                pass
+        return len(s)
+
+    def flush(self) -> None:
+        self._original.flush()
+
+
+def _install_persistent_tee() -> _PersistentTee:
+    os.makedirs("log", exist_ok=True)
+    log_path = os.path.join("log", f"app_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    log_file = open(log_path, "w", buffering=1)  # line-buffered
+    tee = _PersistentTee(sys.stdout)
+    tee.add_sink(log_file.write)
+    sys.stdout = tee
+    print(f"App log: {log_path}")
+    return tee
+
+
+_persistent_tee = _install_persistent_tee()
+
+
 import gui  # Reused GUI from etc-monitor-fixture
 import nrfjprog
 import ppk2
@@ -1321,7 +1361,12 @@ def run_bolt_test(app: gui.App) -> BoltTest:
 
 def main() -> None:
     app = gui.App()
-    sys.stdout.write = app.update_serial_display
+    # Route GUI display through the persistent tee instead of replacing
+    # sys.stdout.write directly, so the log file keeps capturing every print.
+    if isinstance(sys.stdout, _PersistentTee):
+        sys.stdout.add_sink(app.update_serial_display)
+    else:
+        sys.stdout.write = app.update_serial_display
 
     # Basic PPK2 initialisation; if no PPK2 is connected this will just log
     # and return 0. Current‑measurement tests can be added later.
@@ -1329,6 +1374,19 @@ def main() -> None:
         ppk2.setup_ppk()
     except Exception as exc:
         print(f"PPK2 setup failed (non‑fatal during development): {exc}")
+
+    # Abort early if the PPK2 wasn't enumerated at module import. Without it
+    # the DUT cannot be powered correctly and the sleep current test fails
+    # four attempts in a row with a NoneType error on ppk2_device.
+    if not ppk2.device_available:
+        print("=" * 70)
+        print("FATAL: PPK2 not detected at startup.")
+        print("Check the PPK2 USB cable and power switch, then restart the fixture.")
+        print("=" * 70)
+        app.acknowledge_info_var.set(0)
+        app.information_window()
+        app.wait_variable(app.acknowledge_info_var)
+        return
 
     app.acknowledge_info_var.set(0)
     app.information_window()
