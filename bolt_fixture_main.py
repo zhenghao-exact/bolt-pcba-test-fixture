@@ -70,6 +70,28 @@ PPK2_ERROR_COUNT_FILE = "/home/boltfixturepi/.bolt_ppk2_sleep_error_count"
 # Persistent counter file for BLE test failures
 BLE_ERROR_COUNT_FILE = "/home/boltfixturepi/.bolt_ble_fail_count"
 
+# Directory for sleep current failure logs (relative to CWD, alongside `data/`).
+SLEEP_CURRENT_LOG_DIR = "log"
+
+
+class _TeeStdout:
+    """Duplicate writes to the original stdout and an in-memory buffer."""
+
+    def __init__(self, original) -> None:
+        self._original = original
+        self._chunks: list[str] = []
+
+    def write(self, s: str) -> int:
+        self._original.write(s)
+        self._chunks.append(s)
+        return len(s)
+
+    def flush(self) -> None:
+        self._original.flush()
+
+    def getvalue(self) -> str:
+        return "".join(self._chunks)
+
 
 def get_ppk2_error_count() -> int:
     """
@@ -1134,25 +1156,52 @@ def run_bolt_test(app: gui.App) -> BoltTest:
             # Production flash already issued nrfjprog --reset internally.
             # Prompt operator to ready the board before sleep current measurement.
             app.ready_for_sleep_current_window()
-            sleep_test_result = test.run_sleep_current_test()
 
-            # Retry up to 3 times on any out-of-range sleep current result.
-            # Each retry asks the operator to power-cycle the PPK2 (unplug
-            # and re-plug USB) and then tears the device handle down and
-            # brings it back up before the next measurement. We retry on
-            # both abnormal-PPK2 readings (likely fixture fault) and normal
-            # over-threshold readings (could still be a flaky PPK2 reading
-            # — the operator gets to decide whether to bail out via Cancel
-            # on the fixture, or to keep retrying).
-            max_ppk2_retries = 3
-            retry_idx = 0
-            while not sleep_test_result and retry_idx < max_ppk2_retries:
-                retry_idx += 1
-                print(f"Sleep current: out-of-range result, retry {retry_idx}/{max_ppk2_retries}")
-                app.ppk2_retry_window(retry_idx, max_ppk2_retries)
-                if not ppk2.restart_ppk2():
-                    print("Sleep current: PPK2 restart failed; the next attempt will likely fail")
+            # Tee stdout across the whole sleep-current phase (initial attempt
+            # + retries) so we can save the full transcript — including any
+            # ppk2.py prints — to a log file if the test fails for any reason.
+            sleep_tee = _TeeStdout(sys.stdout)
+            original_stdout = sys.stdout
+            sys.stdout = sleep_tee
+            try:
                 sleep_test_result = test.run_sleep_current_test()
+
+                # Retry up to 3 times on any out-of-range sleep current result.
+                # Each retry asks the operator to power-cycle the PPK2 (unplug
+                # and re-plug USB) and then tears the device handle down and
+                # brings it back up before the next measurement. We retry on
+                # both abnormal-PPK2 readings (likely fixture fault) and normal
+                # over-threshold readings (could still be a flaky PPK2 reading
+                # — the operator gets to decide whether to bail out via Cancel
+                # on the fixture, or to keep retrying).
+                max_ppk2_retries = 3
+                retry_idx = 0
+                while not sleep_test_result and retry_idx < max_ppk2_retries:
+                    retry_idx += 1
+                    print(f"Sleep current: out-of-range result, retry {retry_idx}/{max_ppk2_retries}")
+                    app.ppk2_retry_window(retry_idx, max_ppk2_retries)
+                    if not ppk2.restart_ppk2():
+                        print("Sleep current: PPK2 restart failed; the next attempt will likely fail")
+                    sleep_test_result = test.run_sleep_current_test()
+            finally:
+                sys.stdout = original_stdout
+
+            # Persist a failure log if the test failed for any reason (PPK2
+            # fixture issue, threshold exceeded, no valid samples, etc.).
+            if not sleep_test_result or test.ppk2_sleep_error:
+                try:
+                    bolt_id = test.measurements.get("bolt_id", "unknown") or "unknown"
+                    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    os.makedirs(SLEEP_CURRENT_LOG_DIR, exist_ok=True)
+                    log_path = os.path.join(
+                        SLEEP_CURRENT_LOG_DIR,
+                        f"sleep_current_fail_{bolt_id}_{timestamp_str}.log",
+                    )
+                    with open(log_path, "w") as logfile:
+                        logfile.write(sleep_tee.getvalue())
+                    print(f"Sleep current: failure log saved to {log_path}")
+                except Exception as exc:
+                    print(f"Sleep current: failed to write failure log: {exc}")
 
         # Check for abnormal PPK2 readings (fixture issue, not board failure)
         if test.ppk2_sleep_error and sleep_current_choice != 2:
