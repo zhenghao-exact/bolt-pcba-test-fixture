@@ -1318,25 +1318,22 @@ def run_bolt_test(app: gui.App) -> BoltTest:
             original_stdout = sys.stdout
             sys.stdout = sleep_tee
             try:
-                sleep_test_result = test.run_sleep_current_test()
-
-                # Retry up to 3 times on any out-of-range sleep current result.
-                # Each retry asks the operator to power-cycle the PPK2 (unplug
-                # and re-plug USB) and then tears the device handle down and
-                # brings it back up before the next measurement. We retry on
-                # both abnormal-PPK2 readings (likely fixture fault) and normal
-                # over-threshold readings (could still be a flaky PPK2 reading
-                # — the operator gets to decide whether to bail out via Cancel
-                # on the fixture, or to keep retrying).
-                max_ppk2_retries = 3
-                retry_idx = 0
-                while not sleep_test_result and retry_idx < max_ppk2_retries:
-                    retry_idx += 1
-                    print(f"Sleep current: out-of-range result, retry {retry_idx}/{max_ppk2_retries}")
-                    app.ppk2_retry_window(retry_idx, max_ppk2_retries)
-                    if not ppk2.restart_ppk2():
-                        print("Sleep current: PPK2 restart failed; the next attempt will likely fail")
+                # Auto-retry on any out-of-range sleep current result. Mirrors
+                # the BLE retry loop: no GUI prompt between attempts —
+                # restart_ppk2() tears down + re-discovers the PPK2 handle
+                # (no operator power-cycle required) and we re-run the
+                # measurement.
+                max_attempts = 4  # 1 initial + 3 retries
+                sleep_test_result = False
+                for attempt in range(1, max_attempts + 1):
                     sleep_test_result = test.run_sleep_current_test()
+                    if sleep_test_result:
+                        break
+                    if attempt < max_attempts:
+                        print(f"Sleep current: attempt {attempt}/{max_attempts} failed; restarting PPK2 and retrying")
+                        if not ppk2.restart_ppk2():
+                            print("Sleep current: PPK2 restart failed; the next attempt will likely fail")
+                        time.sleep(1.0)
             finally:
                 sys.stdout = original_stdout
 

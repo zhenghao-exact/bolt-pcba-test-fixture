@@ -28,7 +28,6 @@ class App(Tk):
         self.reboot_pi_var = IntVar()
         self.ble_retry_var = IntVar()
         self.sleep_current_ready_var = IntVar()
-        self.ppk2_retry_var = IntVar()
 
         # self.attributes("-fullscreen", True)
         self.bind("<Escape>", self.end_fullscreen)
@@ -788,40 +787,6 @@ class App(Tk):
         self.ble_retry_var.set(0)
         self.wait_variable(self.ble_retry_var)
 
-    def ppk2_retry_window(self, attempt: int, max_attempts: int):
-        """
-        Show a popup informing the operator that the PPK2 reported an
-        abnormal sleep-current reading and asking them to unplug/re-plug
-        the PPK2 before retrying.
-        """
-        popup = Toplevel(padx=20, pady=20)
-        popup.protocol("WM_DELETE_WINDOW", self.disable_event)
-
-        def acknowledge():
-            self.ppk2_retry_var.set(1)
-            popup.destroy()
-            return
-
-        popup.title("PPK2 Abnormal Reading - Retry")
-
-        msg = (
-            f"PPK2 ABNORMAL READING (attempt {attempt} of {max_attempts}):\n\n"
-            "The PPK2 reported a sleep current outside the expected range.\n"
-            "This usually means the PPK2 itself needs a power cycle.\n\n"
-            "1. Unplug the PPK2 USB cable from the Raspberry Pi.\n"
-            "2. Wait a second, then plug it back in.\n"
-            "3. Press RETRY to re-run the sleep current test."
-        )
-
-        label = ttk.Label(popup, text=msg, anchor=W, justify=LEFT)
-        label.config(font=("TkFixedFont", 14))
-        retry_button = ttk.Button(popup, text="RETRY", command=acknowledge)
-
-        label.grid(column=0, row=0, padx=10, pady=10)
-        retry_button.grid(column=0, row=1, padx=10, pady=10)
-
-        self.ppk2_retry_var.set(0)
-        self.wait_variable(self.ppk2_retry_var)
 
 
 if __name__ == "__main__":
