@@ -269,11 +269,8 @@ class App(Tk):
         popup.title("Sleep Current Test — production flash and measurement")
 
         msg = (
-            "SLEEP CURRENT TEST:\n\n"
-            "1. Disconnect the debugger cable from the Bolt PCBA.\n"
-            "2. Disconnect the Bolt USB cable from the Raspberry Pi.\n"
-            "3. Ensure the PPK2 alligator clips remain connected to the Bolt.\n\n"
-            "OK — run production firmware flash, then sleep current measurement.\n"
+            "About to flash production firmware and run the sleep current test.\n\n"
+            "OK — proceed.\n"
             "SKIP — skip both steps (marked passed/skipped; no flash or measurement)."
         )
 
@@ -307,9 +304,11 @@ class App(Tk):
         popup.title("Ready for Sleep Current")
 
         msg = (
-            "PRODUCTION FIRMWARE FLASHED\n\n"
-            "Please unplug the UART line and the flashing line,\n"
-            "then press OK to start the sleep current test."
+            "PRODUCTION FIRMWARE FLASHED — prepare board for measurement:\n\n"
+            "1. Disconnect the debugger cable from the Bolt PCBA.\n"
+            "2. Disconnect the Bolt USB cable from the Raspberry Pi.\n"
+            "3. Ensure the PPK2 alligator clips remain connected to the Bolt.\n\n"
+            "Press OK to start the sleep current test."
         )
 
         label = ttk.Label(popup, text=msg, anchor=W, justify=LEFT)
