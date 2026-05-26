@@ -683,12 +683,15 @@ async def _scan_for_device_presence_async(target_name: str, timeout_s: float = 1
                 rssi = getattr(device, 'rssi', 'N/A')
             print(f"BLE: found {target_name} at {device_address} (RSSI={rssi})")
     
-    scanner = BleakScanner(detection_callback=detection_callback)
-    
+    scanner = BleakScanner(
+        detection_callback=detection_callback,
+        bluez={"filters": {"DuplicateData": True}},
+    )
+
     try:
         # Start scanning
         await scanner.start()
-        
+
         # Continue scanning until device is found or timeout
         while time.time() < end_time and not device_found:
             await asyncio.sleep(0.5)
@@ -796,16 +799,24 @@ async def _scan_ble_advertisement_rssi_async(
             # Log any Bolt device that doesn't match (for debugging)
             print(f"BLE: ⚠ Found Bolt device but name mismatch: '{device.name}' != '{target_name}'")
     
-    scanner = BleakScanner(detection_callback=detection_callback)
-    
+    # DuplicateData=True asks BlueZ to forward every advertisement packet
+    # instead of silently filtering duplicates after the first sighting. We
+    # need this so the detection_callback fires on each adv (otherwise on
+    # retries within the same bluetoothd lifetime the controller filters out
+    # the Bolt because it has been "seen" before and no RSSI samples arrive).
+    scanner = BleakScanner(
+        detection_callback=detection_callback,
+        bluez={"filters": {"DuplicateData": True}},
+    )
+
     try:
         # Start scanning
         await scanner.start()
-        
+
         # Continue scanning until we have enough samples or timeout
         while time.time() < end_time and len(samples) < min_samples:
             await asyncio.sleep(0.5)
-        
+
         # Stop scanning
         await scanner.stop()
     except Exception as exc:

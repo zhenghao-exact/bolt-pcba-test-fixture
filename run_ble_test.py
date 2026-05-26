@@ -62,47 +62,70 @@ def restart_bluetooth_service() -> bool:
         return False
 
 
-def remove_bluetooth_device(mac_address: str = "EA:EF:B1:84:33:26") -> bool:
+def remove_cached_bolt_devices(bolt_id: str) -> bool:
     """
-    Remove a cached bluetooth device by MAC address.
-    
-    Args:
-        mac_address: MAC address of the device to remove (default: EA:EF:B1:84:33:26)
-    
-    Returns True if successful, False otherwise.
+    Remove any cached bluetooth devices whose name matches Bolt_<bolt_id>.
+
+    BlueZ caches discovered devices in /var/lib/bluetooth/.../cache. Once a
+    device has been seen, the controller's discovery filter can suppress
+    further advertisement callbacks for it ("device already known"). Wiping
+    the cache entry before each scan forces BlueZ to treat the next sighting
+    as fresh.
+
+    We parse `bluetoothctl devices` to find every cached device whose name
+    contains Bolt_<bolt_id> and run `bluetoothctl remove <MAC>` on each. We
+    do NOT hard-code a MAC because every Bolt board has its own address.
+
+    Returns True if no errors were encountered (including the case where
+    nothing matched), False otherwise.
     """
-    print(f"BLE test: removing bluetooth device {mac_address}...")
-    process = None
+    target_name = f"Bolt_{bolt_id}"
+    print(f"BLE test: clearing cached devices matching '{target_name}'...")
     try:
-        # Note: This command may require sudo depending on system configuration
-        process = subprocess.Popen(
-            ["bluetoothctl", "remove", mac_address],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+        list_proc = subprocess.run(
+            ["bluetoothctl", "devices"],
+            capture_output=True,
             text=True,
+            timeout=10.0,
         )
-        stdout, stderr = process.communicate(timeout=10.0)
-        if process.returncode == 0:
-            print(f"BLE test: bluetooth device {mac_address} removed successfully")
-            time.sleep(2.0)
-            return True
-        else:
-            print(f"BLE test: bluetooth device removal failed: {stderr}")
-            return False
     except subprocess.TimeoutExpired:
-        print("BLE test: bluetooth device removal timed out")
-        if process:
-            process.kill()
+        print("BLE test: 'bluetoothctl devices' timed out")
         return False
     except Exception as exc:
-        print(f"BLE test: error removing bluetooth device: {exc}")
-        if process:
-            try:
-                process.kill()
-            except Exception:
-                pass
+        print(f"BLE test: error listing bluetooth devices: {exc}")
         return False
+
+    macs_to_remove = []
+    for line in list_proc.stdout.splitlines():
+        # Format: "Device AA:BB:CC:DD:EE:FF Bolt_30000080"
+        parts = line.strip().split(maxsplit=2)
+        if len(parts) >= 3 and parts[0] == "Device" and target_name in parts[2]:
+            macs_to_remove.append((parts[1], parts[2]))
+
+    if not macs_to_remove:
+        print(f"BLE test: no cached devices match '{target_name}'")
+        return True
+
+    ok = True
+    for mac, name in macs_to_remove:
+        print(f"BLE test: removing cached device {name} ({mac})")
+        try:
+            rm_proc = subprocess.run(
+                ["bluetoothctl", "remove", mac],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+            )
+            if rm_proc.returncode != 0:
+                print(f"BLE test: remove {mac} failed: {rm_proc.stderr.strip()}")
+                ok = False
+        except subprocess.TimeoutExpired:
+            print(f"BLE test: remove {mac} timed out")
+            ok = False
+        except Exception as exc:
+            print(f"BLE test: error removing {mac}: {exc}")
+            ok = False
+    return ok
 
 
 def run_ble_test(bolt_id: str, min_samples: int = 3, timeout_s: float = 30.0) -> bool:
@@ -188,10 +211,10 @@ Examples:
     # Run the test
     if not args.skip_restart:
         restart_bluetooth_service()
-    
+
     if not args.skip_remove:
-        remove_bluetooth_device()
-    
+        remove_cached_bolt_devices(bolt_id)
+
     success = run_ble_test(bolt_id, min_samples=args.min_samples, timeout_s=args.timeout)
     
     sys.exit(0 if success else 1)

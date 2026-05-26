@@ -601,11 +601,13 @@ class BoltTest:
         print(f"BLE test: invoking standalone run_ble_test.py script for Bolt_{bolt_id}...")
         process = None
         try:
-            # Use the same Python interpreter and pass bolt_id as argument
-            # The script will handle Bluetooth restart and device removal internally
-            # We don't pass --skip-restart or --skip-remove, so the script manages Bluetooth state
+            # The orchestrator (run_ble_test) restarts bluetoothd once before
+            # the first attempt, so we always pass --skip-restart to avoid
+            # thrashing the daemon between retries. The subprocess still does
+            # its own per-attempt cache cleanup so that BlueZ does not return
+            # stale entries for the Bolt under test.
             process = subprocess.Popen(
-                [sys.executable, script_path, str(bolt_id)],
+                [sys.executable, script_path, "--skip-restart", str(bolt_id)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -663,6 +665,37 @@ class BoltTest:
                     pass
             return False, None
 
+    def _restart_bluetooth_service(self) -> None:
+        """Restart bluetoothd once via sudo. Swallow all errors — the scan
+        itself will report the real failure if BlueZ is unhealthy."""
+        print("BLE test: restarting bluetooth service (one-shot for the cycle)...")
+        process = None
+        try:
+            process = subprocess.Popen(
+                ["sudo", "-S", "systemctl", "restart", "bluetooth"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            stdout, stderr = process.communicate(input="123456\n", timeout=10.0)
+            if process.returncode == 0:
+                print("BLE test: bluetooth service restarted successfully")
+                time.sleep(2.0)
+            else:
+                print(f"BLE test: bluetooth restart failed: {stderr}")
+        except subprocess.TimeoutExpired:
+            print("BLE test: bluetooth restart timed out")
+            if process:
+                process.kill()
+        except Exception as exc:
+            print(f"BLE test: error restarting bluetooth: {exc}")
+            if process:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+
     def _reset_dut_via_nrfjprog(self) -> None:
         """Issue `nrfjprog --reset` and swallow any errors."""
         print("BLE test: issuing nrfjprog --reset after BLE failure...")
@@ -699,34 +732,9 @@ class BoltTest:
             return True
 
         print("BLE test: standalone script failed, falling back to simple device presence scan...")
-        print("BLE test: restarting bluetooth service for fallback scan...")
-        process = None
-        try:
-            process = subprocess.Popen(
-                ["sudo", "-S", "systemctl", "restart", "bluetooth"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            stdout, stderr = process.communicate(input="123456\n", timeout=10.0)
-            if process.returncode == 0:
-                print("BLE test: bluetooth service restarted successfully")
-                time.sleep(2.0)
-            else:
-                print(f"BLE test: bluetooth restart failed: {stderr}")
-        except subprocess.TimeoutExpired:
-            print("BLE test: bluetooth restart timed out")
-            if process:
-                process.kill()
-        except Exception as exc:
-            print(f"BLE test: error restarting bluetooth: {exc}")
-            if process:
-                try:
-                    process.kill()
-                except Exception:
-                    pass
-
+        # Bluetooth was restarted once at the start of run_ble_test(); we do
+        # not restart again per-attempt to avoid leaving bluetoothd in a bad
+        # state from rapid back-to-back restarts.
         if bolt_control.scan_for_ble_device(bolt_id, timeout_s=10.0):
             self.measurements["ble_rssi_median"] = None
             self.tests["ble"] = True
@@ -750,6 +758,11 @@ class BoltTest:
         bolt_id = self.measurements.get("bolt_id")
         if not bolt_id:
             return False
+
+        # One-shot bluetoothd restart at the start of the cycle. The
+        # subprocess and fallback scan both rely on this and skip their own
+        # restarts so we don't thrash the daemon between retries.
+        self._restart_bluetooth_service()
 
         max_attempts = 4  # 1 initial + 3 retries
         for attempt in range(1, max_attempts + 1):
