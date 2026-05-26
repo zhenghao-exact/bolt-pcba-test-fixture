@@ -668,9 +668,74 @@ class BoltTest:
                     pass
             return False, None
 
+    def _unblock_bluetooth_rfkill(self) -> None:
+        """Clear any soft-rfkill block on bluetooth adapters via sysfs.
+
+        On this Pi the controller comes up `off-blocked` after a
+        `systemctl restart bluetooth` — rfkill leaves
+        /sys/class/rfkill/rfkillN/soft set to 1 for the hci0 device, so
+        bluetoothd cannot power the adapter and Bleak reports
+        "No powered Bluetooth adapters found." Writing 0 to the `soft`
+        file for every rfkill device of type "bluetooth" clears the block
+        without needing the `rfkill` CLI installed.
+        """
+        try:
+            entries = os.listdir("/sys/class/rfkill")
+        except OSError as exc:
+            print(f"BLE test: could not list /sys/class/rfkill: {exc}")
+            return
+
+        for entry in entries:
+            type_path = f"/sys/class/rfkill/{entry}/type"
+            soft_path = f"/sys/class/rfkill/{entry}/soft"
+            try:
+                with open(type_path) as f:
+                    if f.read().strip() != "bluetooth":
+                        continue
+            except OSError:
+                continue
+            print(f"BLE test: clearing rfkill soft-block on {entry}")
+            try:
+                proc = subprocess.run(
+                    ["sudo", "-S", "sh", "-c", f"echo 0 > {soft_path}"],
+                    input="123456\n",
+                    capture_output=True,
+                    text=True,
+                    timeout=5.0,
+                )
+                if proc.returncode != 0:
+                    print(f"BLE test: rfkill unblock failed on {entry}: {proc.stderr.strip()}")
+            except subprocess.TimeoutExpired:
+                print(f"BLE test: rfkill unblock timed out on {entry}")
+            except Exception as exc:
+                print(f"BLE test: rfkill unblock error on {entry}: {exc}")
+
+    def _bluetoothctl_power_on(self) -> None:
+        """Ask bluetoothd to power up the default adapter."""
+        try:
+            proc = subprocess.run(
+                ["bluetoothctl", "power", "on"],
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+            )
+            out = (proc.stdout or "").strip()
+            err = (proc.stderr or "").strip()
+            if proc.returncode == 0:
+                print(f"BLE test: bluetoothctl power on -> {out or 'ok'}")
+            else:
+                print(f"BLE test: bluetoothctl power on failed: {err or out}")
+        except subprocess.TimeoutExpired:
+            print("BLE test: bluetoothctl power on timed out")
+        except Exception as exc:
+            print(f"BLE test: bluetoothctl power on error: {exc}")
+
     def _restart_bluetooth_service(self) -> None:
-        """Restart bluetoothd once via sudo. Swallow all errors — the scan
-        itself will report the real failure if BlueZ is unhealthy."""
+        """Restart bluetoothd once, clear rfkill, and power the adapter.
+
+        Swallow all errors — the scan itself will report the real failure
+        if BlueZ is still unhealthy after the restart sequence.
+        """
         print("BLE test: restarting bluetooth service (one-shot for the cycle)...")
         process = None
         try:
@@ -698,6 +763,15 @@ class BoltTest:
                     process.kill()
                 except Exception:
                     pass
+
+        # On the fixture Pi the adapter stays soft-blocked after a fresh
+        # bluetoothd start (bluetoothd logs "Failed to set mode: Failed
+        # (0x03)"). Force-unblock via sysfs, give the kernel a moment to
+        # bring hci0 back up, then ask bluetoothd to power it on so Bleak
+        # finds a powered adapter on the next scan.
+        self._unblock_bluetooth_rfkill()
+        time.sleep(1.0)
+        self._bluetoothctl_power_on()
 
     def _reset_dut_via_nrfjprog(self) -> None:
         """Issue `nrfjprog --reset` and swallow any errors."""
