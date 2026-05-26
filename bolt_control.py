@@ -734,70 +734,39 @@ async def _scan_ble_advertisement_rssi_async(
     print(f"BLE: scanning for device '{target_name}' to collect advertisement RSSI samples")
     end_time = time.time() + timeout_s
     samples: List[int] = []
-    last_seen_address = None
     devices_seen_count = 0
-    bolt_devices_seen = []
-    
+
     def detection_callback(device, advertisement_data):
-        """Callback for when a device is detected during scanning."""
-        nonlocal samples, last_seen_address, devices_seen_count, bolt_devices_seen
-        
+        """Callback for when a device is detected during scanning.
+
+        Keep this lean — any print() here serializes through the GUI tee
+        and can starve the BlueZ adv stream when there are dozens of other
+        Bolts in range. Log only on an exact name match.
+        """
+        nonlocal samples, devices_seen_count
+
         devices_seen_count += 1
-        device_name = device.name if device.name else "(no name)"
-        address = device.address
-        
-        # Track all Bolt devices seen
-        if "Bolt" in device_name:
-            if device_name not in bolt_devices_seen:
-                bolt_devices_seen.append(device_name)
-                rssi = None
-                if hasattr(advertisement_data, 'rssi'):
-                    rssi = advertisement_data.rssi
-                if rssi is None:
-                    rssi = getattr(device, 'rssi', 'N/A')
-                print(f"BLE: ⚠ Found Bolt device: name='{device_name}' address={address} RSSI={rssi} (looking for '{target_name}')")
-        
-        # Log first 10 devices for debugging
-        if devices_seen_count <= 10:
-            rssi = None
-            if hasattr(advertisement_data, 'rssi'):
-                rssi = advertisement_data.rssi
-            if rssi is None:
-                rssi = getattr(device, 'rssi', 'N/A')
-            print(f"BLE: detected device #{devices_seen_count}: name='{device_name}' address={address} RSSI={rssi}")
-        
-        if device.name == target_name:
-            # RSSI is available in the AdvertisementData object (if available)
-            rssi = None
-            if hasattr(advertisement_data, 'rssi'):
-                rssi = advertisement_data.rssi
-            
-            # Fallback: try to get RSSI from device object if not in advertisement_data
-            if rssi is None:
-                rssi = getattr(device, 'rssi', None)
-            
-            # Always add a sample when device is found, even if RSSI is not available
-            # Use RSSI if available, otherwise use a placeholder value (0) to indicate device was seen
-            if rssi is not None:
-                try:
-                    rssi_int = int(rssi)
-                    samples.append(rssi_int)
-                    print(f"BLE: ✓ MATCH! collected adv RSSI={rssi_int} dBm from {address} (samples={len(samples)})")
-                except (ValueError, TypeError):
-                    # If RSSI conversion fails, still count as a sample with placeholder
-                    samples.append(0)
-                    print(f"BLE: ✓ MATCH! found {target_name} at {address} (RSSI unavailable, samples={len(samples)})")
-            else:
-                # Device found but RSSI not available - still count as a sample
-                samples.append(0)
-                print(f"BLE: ✓ MATCH! found {target_name} at {address} (RSSI not available, samples={len(samples)})")
-            
-            # Track the address we're seeing (for logging purposes)
-            if last_seen_address is None:
-                last_seen_address = address
-        elif device.name and "Bolt" in device.name:
-            # Log any Bolt device that doesn't match (for debugging)
-            print(f"BLE: ⚠ Found Bolt device but name mismatch: '{device.name}' != '{target_name}'")
+
+        if device.name != target_name:
+            return
+
+        rssi = None
+        if hasattr(advertisement_data, 'rssi'):
+            rssi = advertisement_data.rssi
+        if rssi is None:
+            rssi = getattr(device, 'rssi', None)
+
+        if rssi is not None:
+            try:
+                rssi_int = int(rssi)
+                samples.append(rssi_int)
+                print(f"BLE: ✓ MATCH! collected adv RSSI={rssi_int} dBm from {device.address} (samples={len(samples)})")
+                return
+            except (ValueError, TypeError):
+                pass
+
+        samples.append(0)
+        print(f"BLE: ✓ MATCH! found {target_name} at {device.address} (RSSI unavailable, samples={len(samples)})")
     
     # DuplicateData=True asks BlueZ to forward every advertisement packet
     # instead of silently filtering duplicates after the first sighting. We
@@ -832,10 +801,6 @@ async def _scan_ble_advertisement_rssi_async(
             f"(target: {min_samples}) within {timeout_s}s timeout"
         )
         print(f"BLE: Total devices detected during scan: {devices_seen_count}")
-        if bolt_devices_seen:
-            print(f"BLE: Bolt devices seen (but not matching '{target_name}'): {bolt_devices_seen}")
-        else:
-            print(f"BLE: No Bolt devices detected at all during scan")
     else:
         print(f"BLE: collected {len(samples)} advertisement RSSI samples")
     
