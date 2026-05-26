@@ -113,6 +113,9 @@ BLE_ERROR_COUNT_FILE = "/home/boltfixturepi/.bolt_ble_fail_count"
 # Directory for sleep current failure logs (relative to CWD, alongside `data/`).
 SLEEP_CURRENT_LOG_DIR = "log"
 
+# Directory for BLE cycle failure logs (relative to CWD, alongside `data/`).
+BLE_LOG_DIR = "log"
+
 
 class _TeeStdout:
     """Duplicate writes to the original stdout and an in-memory buffer."""
@@ -1171,8 +1174,32 @@ def run_bolt_test(app: gui.App) -> BoltTest:
         app.update_test_indicator(5, True)
 
         # Indicator 6: BLE test.
-        ble_ok = test.run_ble_test()
+        # Tee stdout across the whole BLE cycle (orchestrator + every
+        # subprocess attempt + fallback scan) so the full transcript can be
+        # written to log/ble_fail_<id>_<ts>.log if the cycle fails.
+        ble_tee = _TeeStdout(sys.stdout)
+        original_stdout = sys.stdout
+        sys.stdout = ble_tee
+        try:
+            ble_ok = test.run_ble_test()
+        finally:
+            sys.stdout = original_stdout
+
         if not ble_ok:
+            try:
+                ble_bolt_id = test.measurements.get("bolt_id", "unknown") or "unknown"
+                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                os.makedirs(BLE_LOG_DIR, exist_ok=True)
+                log_path = os.path.join(
+                    BLE_LOG_DIR,
+                    f"ble_fail_{ble_bolt_id}_{timestamp_str}.log",
+                )
+                with open(log_path, "w") as logfile:
+                    logfile.write(ble_tee.getvalue())
+                print(f"BLE test: failure log saved to {log_path}")
+            except Exception as exc:
+                print(f"BLE test: failed to write failure log: {exc}")
+
             app.update_test_indicator(6, False)
             if test.ble_first_failure:
                 # First BLE failure: inform operator and abort this run
