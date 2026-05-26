@@ -301,26 +301,34 @@ class App(Tk):
             self.sleep_current_ready_var.set(1)
             popup.destroy()
 
+        def skip_sleep_current():
+            self.sleep_current_ready_var.set(2)
+            popup.destroy()
+
         popup.title("Ready for Sleep Current")
 
         msg = (
-            "PRODUCTION FIRMWARE FLASHED — prepare board for measurement:\n\n"
-            "1. Disconnect the debugger cable from the Bolt PCBA.\n"
-            "2. Disconnect the Bolt USB cable from the Raspberry Pi.\n"
-            "3. Ensure the PPK2 alligator clips remain connected to the Bolt.\n\n"
-            "Press OK to start the sleep current test."
+            "PRODUCTION FIRMWARE READY TO FLASH\n\n"
+
+            "About to flash production firmware and run the sleep current test.\n\n"
+            "OK — proceed.\n"
+            "SKIP — skip both steps (marked passed/skipped; no flash or measurement)."        
         )
 
         label = ttk.Label(popup, text=msg, anchor=W, justify=LEFT)
         label.config(font=("TkFixedFont", 14))
         ok_button = ttk.Button(popup, text="OK", command=acknowledge)
+        skip_button = ttk.Button(popup, text="SKIP", command=skip_sleep_current)
+
 
         label.grid(column=0, row=0, padx=10, pady=10)
         ok_button.grid(column=0, row=1, padx=10, pady=10)
+        skip_button.grid(column=1, row=1, padx=10, pady=10)
 
         self.sleep_current_ready_var.set(0)
         self.wait_variable(self.sleep_current_ready_var)
-
+        self.update_idletasks()
+        return int(self.sleep_current_ready_var.get())
 
     def usb_replug_window(self):
         popup = Toplevel(padx=20, pady=20)
@@ -334,9 +342,10 @@ class App(Tk):
         popup.title("Reconnect Bolt USB")
 
         msg = (
-            "USB RECONNECT:\n\n"
-            "1. Unplug the Bolt PCBA USB cable from the Raspberry Pi.\n"
-            "2. Plug the Bolt PCBA USB cable back into the Raspberry Pi.\n\n"
+            "PRODUCTION  FIRMWARE FLASHED — USB UNPLUG:\n\n"
+            "1. Disconnect the debugger cable from the Bolt PCBA.\n"
+            "2. Disconnect the Bolt USB cable from the Raspberry Pi.\n"
+            "3. Ensure the PPK2 alligator clips remain connected to the Bolt.\n\n"
             "Wait a few seconds for the device to re‑enumerate, then press OK."
         )
 

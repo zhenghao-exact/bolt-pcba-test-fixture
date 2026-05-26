@@ -1309,50 +1309,58 @@ def run_bolt_test(app: gui.App) -> BoltTest:
             app.update_test_indicator(8, True)
             # Production flash already issued nrfjprog --reset internally.
             # Prompt operator to ready the board before sleep current measurement.
-            app.ready_for_sleep_current_window()
-
-            # Tee stdout across the whole sleep-current phase (initial attempt
-            # + retries) so we can save the full transcript — including any
-            # ppk2.py prints — to a log file if the test fails for any reason.
-            sleep_tee = _TeeStdout(sys.stdout)
-            original_stdout = sys.stdout
-            sys.stdout = sleep_tee
-            try:
-                # Auto-retry on any out-of-range sleep current result. Mirrors
-                # the BLE retry loop: no GUI prompt between attempts —
-                # restart_ppk2() tears down + re-discovers the PPK2 handle
-                # (no operator power-cycle required) and we re-run the
-                # measurement.
-                max_attempts = 4  # 1 initial + 3 retries
-                sleep_test_result = False
-                for attempt in range(1, max_attempts + 1):
-                    sleep_test_result = test.run_sleep_current_test()
-                    if sleep_test_result:
-                        break
-                    if attempt < max_attempts:
-                        print(f"Sleep current: attempt {attempt}/{max_attempts} failed; restarting PPK2 and retrying")
-                        if not ppk2.restart_ppk2():
-                            print("Sleep current: PPK2 restart failed; the next attempt will likely fail")
-                        time.sleep(1.0)
-            finally:
-                sys.stdout = original_stdout
-
-            # Persist a failure log if the test failed for any reason (PPK2
-            # fixture issue, threshold exceeded, no valid samples, etc.).
-            if not sleep_test_result or test.ppk2_sleep_error:
+            ready_choice = app.ready_for_sleep_current_window()
+            if ready_choice == 2:
+                print("Operator skipped sleep current test at ready prompt.")
+                test.tests["sleep_current"] = True
+                test.measurements["sleep_current_ua"] = "SKIPPED"
+                test.measurements["sleep_current_skipped"] = True
+                app.update_test_indicator(9, True)
+                upload_results.mark_skipped("sleep current measurement skipped by operator at ready prompt")
+                sleep_test_result = True
+            else:
+                # Tee stdout across the whole sleep-current phase (initial attempt
+                # + retries) so we can save the full transcript — including any
+                # ppk2.py prints — to a log file if the test fails for any reason.
+                sleep_tee = _TeeStdout(sys.stdout)
+                original_stdout = sys.stdout
+                sys.stdout = sleep_tee
                 try:
-                    bolt_id = test.measurements.get("bolt_id", "unknown") or "unknown"
-                    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    os.makedirs(SLEEP_CURRENT_LOG_DIR, exist_ok=True)
-                    log_path = os.path.join(
-                        SLEEP_CURRENT_LOG_DIR,
-                        f"sleep_current_fail_{bolt_id}_{timestamp_str}.log",
-                    )
-                    with open(log_path, "w") as logfile:
-                        logfile.write(sleep_tee.getvalue())
-                    print(f"Sleep current: failure log saved to {log_path}")
-                except Exception as exc:
-                    print(f"Sleep current: failed to write failure log: {exc}")
+                    # Auto-retry on any out-of-range sleep current result. Mirrors
+                    # the BLE retry loop: no GUI prompt between attempts —
+                    # restart_ppk2() tears down + re-discovers the PPK2 handle
+                    # (no operator power-cycle required) and we re-run the
+                    # measurement.
+                    max_attempts = 4  # 1 initial + 3 retries
+                    sleep_test_result = False
+                    for attempt in range(1, max_attempts + 1):
+                        sleep_test_result = test.run_sleep_current_test()
+                        if sleep_test_result:
+                            break
+                        if attempt < max_attempts:
+                            print(f"Sleep current: attempt {attempt}/{max_attempts} failed; restarting PPK2 and retrying")
+                            if not ppk2.restart_ppk2():
+                                print("Sleep current: PPK2 restart failed; the next attempt will likely fail")
+                            time.sleep(1.0)
+                finally:
+                    sys.stdout = original_stdout
+
+                # Persist a failure log if the test failed for any reason (PPK2
+                # fixture issue, threshold exceeded, no valid samples, etc.).
+                if not sleep_test_result or test.ppk2_sleep_error:
+                    try:
+                        bolt_id = test.measurements.get("bolt_id", "unknown") or "unknown"
+                        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        os.makedirs(SLEEP_CURRENT_LOG_DIR, exist_ok=True)
+                        log_path = os.path.join(
+                            SLEEP_CURRENT_LOG_DIR,
+                            f"sleep_current_fail_{bolt_id}_{timestamp_str}.log",
+                        )
+                        with open(log_path, "w") as logfile:
+                            logfile.write(sleep_tee.getvalue())
+                        print(f"Sleep current: failure log saved to {log_path}")
+                    except Exception as exc:
+                        print(f"Sleep current: failed to write failure log: {exc}")
 
         # Check for abnormal PPK2 readings (fixture issue, not board failure)
         if test.ppk2_sleep_error and sleep_current_choice != 2:
