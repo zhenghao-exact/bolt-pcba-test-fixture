@@ -550,10 +550,24 @@ class BoltTest:
                 print(f"Set serial: exception during retry: {exc}")
                 ok = False
 
-        self.tests["set_serial"] = ok
         if not ok:
+            self.tests["set_serial"] = False
             self.failure = True
-        return ok
+            return False
+
+        # The settings write returned OK; prove it persisted by rebooting the
+        # DUT and confirming the firmware reports the matching Device ID in its
+        # boot log. set_serial passes only on a verified match.
+        try:
+            verified = bolt_control.verify_serial_via_reboot(self.ser, str(bolt_id))
+        except (SerialException, OSError) as exc:
+            print(f"Set serial: serial error during reboot verification: {exc}")
+            verified = False
+
+        self.tests["set_serial"] = verified
+        if not verified:
+            self.failure = True
+        return verified
 
     # --- IMU test ---------------------------------------------------------
 

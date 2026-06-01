@@ -387,6 +387,75 @@ def set_pcba_serial(ser: Serial, bolt_id: str) -> bool:
     return saw_ok
 
 
+def read_device_id_from_boot(ser: Serial, timeout_s: float = 20.0) -> Optional[str]:
+    """
+    Read the Device ID the firmware reports in its boot log.
+
+    On boot the firmware prints a line like:
+        <inf> ble_module: Device ID 30000205
+
+    Returns the Device ID as a decimal string (e.g. '30000205'), or None if no
+    Device ID line appears within timeout_s.
+    """
+    end_time = time.time() + timeout_s
+    saw_boot_banner = False
+    while time.time() < end_time:
+        line = ser.readline().decode(errors="ignore").strip()
+        if not line:
+            continue
+        print(f"[reboot] {line}")
+        if "Booting" in line:
+            saw_boot_banner = True
+        m = re.search(r"Device ID\s+(\d+)", line)
+        if m:
+            device_id = m.group(1)
+            print(f"[reboot] parsed Device ID: {device_id}")
+            return device_id
+    if not saw_boot_banner:
+        print("[reboot] warning: boot banner not seen after reboot command")
+    return None
+
+
+def verify_serial_via_reboot(ser: Serial, expected_bolt_id: str, timeout_s: float = 20.0) -> bool:
+    """
+    Reboot the DUT via `kernel reboot` and confirm the firmware reports the
+    expected Device ID in its boot log.
+
+    This proves the serial number written by set_pcba_serial() actually
+    persisted to NVS and is loaded on boot. The DUT UART is a stable USB-serial
+    bridge that does not re-enumerate on a firmware reboot, so the boot log
+    streams through the same open port. Returns True only if the boot log
+    reports a Device ID equal to expected_bolt_id.
+    """
+    clear_serial_buffer(ser)
+
+    # Leading newline mirrors set_pcba_serial(): ensures the shell parses a
+    # clean command line even if a partial line was pending.
+    print(f"Set serial: rebooting DUT to verify Device ID == {expected_bolt_id}...")
+    try:
+        ser.write(b"\nkernel reboot\n")
+        ser.flushOutput()
+    except (SerialException, OSError, IOError) as exc:
+        print(f"Set serial: failed to send 'kernel reboot': {exc}")
+        return False
+
+    reported = read_device_id_from_boot(ser, timeout_s=timeout_s)
+    if reported is None:
+        print("Set serial: no Device ID reported in boot log after reboot")
+        return False
+
+    try:
+        ok = int(reported) == int(expected_bolt_id)
+    except ValueError:
+        ok = reported == str(expected_bolt_id)
+
+    if ok:
+        print(f"Set serial: verified Device ID {reported} matches expected {expected_bolt_id}")
+    else:
+        print(f"Set serial: MISMATCH - boot reported Device ID {reported}, expected {expected_bolt_id}")
+    return ok
+
+
 def simple_health_check(ser: Serial) -> bool:
     """
     Lightweight placeholder for a DUT health check.
