@@ -625,15 +625,16 @@ class BoltTest:
             # its own per-attempt cache cleanup so that BlueZ does not return
             # stale entries for the Bolt under test.
             process = subprocess.Popen(
-                [sys.executable, script_path, "--skip-restart", str(bolt_id)],
+                [sys.executable, script_path, "--skip-restart", "--timeout", "10", str(bolt_id)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=script_dir,
             )
-            
-            # Wait for completion with timeout (script timeout is 30s default, add buffer)
-            stdout, stderr = process.communicate(timeout=60.0)
+
+            # Wait for completion with timeout. The script's BLE scan is capped
+            # at 10s (--timeout 10); add buffer for its per-attempt cache cleanup.
+            stdout, stderr = process.communicate(timeout=20.0)
             
             # Log output for debugging
             if stdout:
@@ -670,7 +671,7 @@ class BoltTest:
             return False, None
             
         except subprocess.TimeoutExpired:
-            print("BLE test: run_ble_test.py timed out after 60s")
+            print("BLE test: run_ble_test.py timed out after 20s")
             if process:
                 process.kill()
             return False, None
