@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 import time
@@ -1165,7 +1166,7 @@ def prompt_for_bolt_qr(app: gui.App) -> str:
     return qr_payload
 
 
-def run_bolt_test(app: gui.App) -> BoltTest:
+def run_bolt_test(app: gui.App, skip_cal: bool = False) -> BoltTest:
     test = BoltTest()
     start_time = time.time()
 
@@ -1284,11 +1285,17 @@ def run_bolt_test(app: gui.App) -> BoltTest:
                 return test
         app.update_test_indicator(6, True)
 
-        # Indicator 7: analog calibration (placeholder pass).
-        if not test.run_analog_calibration():
+        # Indicator 7: analog calibration.
+        if skip_cal:
+            print("Analog cal: --SKIP_CAL set; skipping calibration and marking as passed.")
+            test.tests["analog"] = True
+            upload_results.mark_skipped("analog calibration skipped via --SKIP_CAL")
+            app.update_test_indicator(7, True)
+        elif not test.run_analog_calibration():
             app.update_test_indicator(7, False)
             return test
-        app.update_test_indicator(7, True)
+        else:
+            app.update_test_indicator(7, True)
 
         # Indicator 8 + 9: gate — production flash + sleep current (or skip both)
         sleep_current_choice = app.sleep_current_window()
@@ -1479,6 +1486,17 @@ def run_bolt_test(app: gui.App) -> BoltTest:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Bolt PCBA test fixture runner")
+    parser.add_argument(
+        "--SKIP_CAL",
+        action="store_true",
+        help="Skip the analog calibration test and mark it as passed (green).",
+    )
+    args = parser.parse_args()
+    skip_cal = args.SKIP_CAL
+    if skip_cal:
+        print("Startup: --SKIP_CAL enabled; analog calibration will be skipped and marked green.")
+
     app = gui.App()
     # Route GUI display through the persistent tee instead of replacing
     # sys.stdout.write directly, so the log file keeps capturing every print.
@@ -1514,7 +1532,7 @@ def main() -> None:
     while True:
         app.reset_indicators()
         app.update_test_display(state="active")
-        bolt_test = run_bolt_test(app)
+        bolt_test = run_bolt_test(app, skip_cal=skip_cal)
         
         # Check if PPK2 error occurred - if so, exit the loop to allow app restart
         if bolt_test.ppk2_sleep_error:
