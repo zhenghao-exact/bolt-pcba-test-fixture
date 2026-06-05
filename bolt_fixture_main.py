@@ -220,6 +220,7 @@ class BoltTest:
         self.baseline_ports: set[str] = set()
         self.dut_serial_port: Optional[str] = None
         self.ppk2_sleep_error = False  # Flag for abnormal PPK2 readings (> 1000 uA)
+        self.ppk2_lost = False  # True when the PPK2 dropped off the USB bus (EIO) and can't be recovered
         self.ble_first_failure = False  # True when we hit first BLE failure since last success
 
     # --- Utility helpers -------------------------------------------------
@@ -1014,6 +1015,7 @@ class BoltTest:
         # Reset abnormal-reading flag for this attempt so the retry loop in
         # run_bolt_test can detect a fresh PPK2 fault.
         self.ppk2_sleep_error = False
+        self.ppk2_lost = False
         print("Sleep current: power cycling DUT via PPK2...")
         try:
             ppk2.toggle_DUT_power_OFF()
@@ -1052,9 +1054,33 @@ class BoltTest:
         count = 0
         readings_to_skip = 2  # Skip the first two readings as they're often abnormal
 
+        # A sustained run of -1 returns means get_average_current keeps hitting
+        # USB I/O errors (Errno 5) — i.e. the PPK2 has dropped off the bus.
+        # Bail out fast instead of spinning for the full duration and spamming
+        # thousands of error lines into the log.
+        consecutive_errors = 0
+        MAX_CONSECUTIVE_PPK2_ERRORS = 25
+
         print(f"Sleep current: measuring for at least {min_duration_s} seconds (up to {duration_s} seconds)...")
         while time.time() - start_time < duration_s:
             current_ua = ppk2.get_average_current(100)
+
+            # get_average_current returns -1 on a PPK2 I/O error (or when the
+            # device handle is gone). A run of these means the device is lost,
+            # not just a noisy sample — abort early and flag it for the caller.
+            if current_ua == -1:
+                consecutive_errors += 1
+                if consecutive_errors >= MAX_CONSECUTIVE_PPK2_ERRORS:
+                    print(
+                        f"Sleep current: PPK2 returned {consecutive_errors} consecutive "
+                        "I/O errors - device appears lost from the USB bus; aborting"
+                    )
+                    self.ppk2_lost = True
+                    self.tests["sleep_current"] = False
+                    return False
+                time.sleep(0.05)  # avoid a tight error spin while hammering EIO
+                continue
+            consecutive_errors = 0
 
             # Skip the first two readings as they're often abnormal
             if readings_to_skip > 0:
@@ -1359,10 +1385,20 @@ def run_bolt_test(app: gui.App, skip_cal: bool = False) -> BoltTest:
                         sleep_test_result = test.run_sleep_current_test()
                         if sleep_test_result:
                             break
+                        # If the PPK2 has physically dropped off the USB bus,
+                        # retrying is futile — re-discovery returns no device and
+                        # every further attempt just crashes on a None handle.
+                        # Abort the retry loop and escalate to the replug prompt.
+                        if test.ppk2_lost or not ppk2.device_present():
+                            test.ppk2_lost = True
+                            print("Sleep current: PPK2 lost from USB bus - aborting retries, operator must replug")
+                            break
                         if attempt < max_attempts:
                             print(f"Sleep current: attempt {attempt}/{max_attempts} failed; restarting PPK2 and retrying")
                             if not ppk2.restart_ppk2():
-                                print("Sleep current: PPK2 restart failed; the next attempt will likely fail")
+                                print("Sleep current: PPK2 restart failed; device not found on bus - aborting retries")
+                                test.ppk2_lost = True
+                                break
                             time.sleep(1.0)
                 finally:
                     sys.stdout = original_stdout
@@ -1383,6 +1419,16 @@ def run_bolt_test(app: gui.App, skip_cal: bool = False) -> BoltTest:
                         print(f"Sleep current: failure log saved to {log_path}")
                     except Exception as exc:
                         print(f"Sleep current: failed to write failure log: {exc}")
+
+        # PPK2 physically dropped off the USB bus (repeated EIO) — a software
+        # restart can't recover it. Prompt the operator to close the app, replug
+        # the PPK2, and reopen. This is a fixture/cable issue, not a board fault,
+        # so do not bump the abnormal-reading counter or print a label.
+        if test.ppk2_lost and sleep_current_choice != 2:
+            app.update_test_indicator(9, False)
+            print("Sleep current: PPK2 lost from USB - prompting operator to replug and restart fixture")
+            app.ppk2_lost_window()
+            return test
 
         # Check for abnormal PPK2 readings (fixture issue, not board failure)
         if test.ppk2_sleep_error and sleep_current_choice != 2:
@@ -1451,6 +1497,14 @@ def run_bolt_test(app: gui.App, skip_cal: bool = False) -> BoltTest:
 
     finally:
         # Always execute these, even on early return
+        # Skip normal finalization if the PPK2 was lost from the USB bus
+        # (fixture/cable issue, not a board failure — operator has been prompted
+        # to replug it).
+        if test.ppk2_lost:
+            print(f"Time to complete Bolt test: {time.time() - start_time:.2f}s")
+            print("PPK2 lost: skipping label printing and CSV writing (fixture issue, not board failure)")
+            return test
+
         # Skip normal finalization if PPK2 error was detected (fixture issue, not board failure)
         if test.ppk2_sleep_error:
             print(f"Time to complete Bolt test: {time.time() - start_time:.2f}s")
@@ -1548,7 +1602,13 @@ def main() -> None:
         app.reset_indicators()
         app.update_test_display(state="active")
         bolt_test = run_bolt_test(app, skip_cal=skip_cal)
-        
+
+        # Check if the PPK2 dropped off the USB bus - the operator was prompted
+        # to replug it, so exit the loop to close the app for a clean restart.
+        if getattr(bolt_test, "ppk2_lost", False):
+            print("PPK2 lost: exiting main loop - operator should replug the PPK2 and reopen the fixture")
+            break
+
         # Check if PPK2 error occurred - if so, exit the loop to allow app restart
         if bolt_test.ppk2_sleep_error:
             error_count = get_ppk2_error_count()

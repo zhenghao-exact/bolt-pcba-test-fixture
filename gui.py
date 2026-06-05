@@ -25,6 +25,7 @@ class App(Tk):
         self.imu_instruction_var = IntVar()
         self.sleep_current_var = IntVar(value=0)
         self.restart_fixture_var = IntVar()
+        self.ppk2_lost_var = IntVar()
         self.reboot_pi_var = IntVar()
         self.ble_retry_var = IntVar()
         self.sleep_current_ready_var = IntVar()
@@ -714,6 +715,46 @@ class App(Tk):
         self.restart_fixture_var.set(0)
         self.wait_variable(self.restart_fixture_var)
     
+    # Opens a popup instructing the operator to replug the PPK2 after it dropped
+    # off the USB bus mid-test (repeated I/O errors, unrecoverable in software)
+    def ppk2_lost_window(self):
+        """
+        Show a popup when the PPK2 has dropped off the USB bus mid-test and
+        could not be recovered by a software restart. Instructs the operator to
+        close the app, replug the PPK2, and reopen the fixture.
+        """
+        ppk2_lost_popup = Toplevel(padx=20, pady=20)
+        ppk2_lost_popup.protocol("WM_DELETE_WINDOW", self.disable_event)
+
+        def acknowledge():
+            self.ppk2_lost_var.set(1)
+            ppk2_lost_popup.destroy()
+            return
+
+        ppk2_lost_popup.title("PPK2 Disconnected")
+
+        msg = (
+            "PPK2 LOST FROM USB:\n\n"
+            "The PPK2 stopped responding (repeated USB I/O errors) and could\n"
+            "not be recovered automatically. This is a fixture/cable issue,\n"
+            "not a board failure.\n\n"
+            "To recover:\n"
+            "  1. Press OK to close this application.\n"
+            "  2. Unplug the PPK2 USB cable, wait a few seconds, then replug it.\n"
+            "  3. Reopen the fixture application and re-test this board.\n\n"
+            "Press OK to exit the application."
+        )
+
+        label = ttk.Label(ppk2_lost_popup, text=msg, anchor=W, justify=LEFT)
+        label.config(font=("TkFixedFont", 14))
+        ok_button = ttk.Button(ppk2_lost_popup, text="OK", command=acknowledge)
+
+        label.grid(column=0, row=0, padx=10, pady=10)
+        ok_button.grid(column=0, row=1, padx=10, pady=10)
+
+        self.ppk2_lost_var.set(0)
+        self.wait_variable(self.ppk2_lost_var)
+
     # Opens a popup asking the operator to confirm rebooting the Raspberry Pi
     def reboot_pi_window(self) -> bool:
         """

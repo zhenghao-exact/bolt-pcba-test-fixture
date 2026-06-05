@@ -139,22 +139,47 @@ def restart_ppk2() -> bool:
     print("PPK2 restart: device re-initialised and measuring")
     return True
     
+def device_present() -> bool:
+    """
+    Return True if at least one PPK2 is currently enumerated on the USB bus.
+
+    Unlike the module-level `device_available` flag (which reflects the last
+    successful init), this queries the OS live, so it can distinguish a PPK2
+    that has physically dropped off the bus (e.g. after repeated EIO errors)
+    from one that is merely in a bad software state.
+    """
+    try:
+        return len(PPK2_API.list_devices()) >= 1
+    except Exception as exc:
+        print(f"PPK2: device_present() check failed: {exc}")
+        return False
+
+
 def toggle_DUT_power_ON():
+    if ppk2_device is None:
+        print("PPK2: cannot turn DUT power ON - device handle is None")
+        return
     ppk2_device.toggle_DUT_power("ON")
-    
+
     return
-    
+
 def toggle_DUT_power_OFF():
+    if ppk2_device is None:
+        print("PPK2: cannot turn DUT power OFF - device handle is None")
+        return
     ppk2_device.toggle_DUT_power("OFF")
 
 def set_to_ampere_mode():
-    if device_available:
+    if device_available and ppk2_device is not None:
         # Use source meter mode like Flex, but keep function name for compatibility
         ppk2_device.use_source_meter()
         ppk2_device.set_source_voltage(3300)
         ppk2_device.toggle_DUT_power("ON")
-    
+
 def set_to_source_mode():
+    if ppk2_device is None:
+        print("PPK2: cannot set source mode - device handle is None")
+        return
     ppk2_device.use_source_meter()
     ppk2_device.set_source_voltage(3300)
     # Keep DUT power enabled and measuring when switching back to source mode.
