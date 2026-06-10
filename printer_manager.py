@@ -3,6 +3,7 @@ from brother_ql.conversion import convert
 from brother_ql.backends.helpers import send
 from PIL import Image, ImageDraw, ImageFont
 import qrcode
+import os
 import subprocess
 import time
 
@@ -20,32 +21,37 @@ except Exception:
 
 print("Printer: starting printer service...")
 process = None
-try:
-    # Use sudo -S to read password from stdin
-    process = subprocess.Popen(
-        ["sudo", "-S", "chmod", "777", "/dev/usb/lp0"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    stdout, stderr = process.communicate(input="123456\n", timeout=5.0)
-    if process.returncode == 0:
-        print("Printer: printer service started successfully")
-        time.sleep(2.0)
-    else:
-        print(f"Printer: printer service start failed: {stderr}")
-except subprocess.TimeoutExpired:
-    print("Printer: printer service start timed out")
-    if process:
-        process.kill()  
-except Exception as exc:
-    print(f"Printer: error starting printer service: {exc}")
-    if process:
-        try:
+if not os.path.exists("/dev/usb/lp0"):
+    # Printer not connected — skip the sudo chmod entirely. Printing is
+    # best-effort and must never block startup; labels can be printed later.
+    print("Printer: /dev/usb/lp0 not present - skipping printer service start (printer not connected)")
+else:
+    try:
+        # Use sudo -S to read password from stdin
+        process = subprocess.Popen(
+            ["sudo", "-S", "chmod", "777", "/dev/usb/lp0"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout, stderr = process.communicate(input="123456\n", timeout=5.0)
+        if process.returncode == 0:
+            print("Printer: printer service started successfully")
+            time.sleep(2.0)
+        else:
+            print(f"Printer: printer service start failed: {stderr}")
+    except subprocess.TimeoutExpired:
+        print("Printer: printer service start timed out")
+        if process:
             process.kill()
-        except Exception:
-            pass
+    except Exception as exc:
+        print(f"Printer: error starting printer service: {exc}")
+        if process:
+            try:
+                process.kill()
+            except Exception:
+                pass
 
 font1 = ImageFont.truetype("/usr/share/fonts/truetype/noto/NotoMono-Regular.ttf", size = 30)
 font2 = ImageFont.truetype("/usr/share/fonts/truetype/noto/NotoMono-Regular.ttf", size = 15)

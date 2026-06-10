@@ -3,10 +3,48 @@ import os
 import sys
 import time
 import subprocess
+import threading
 import csv
 import re
 from datetime import datetime
 from typing import Dict, Any, Tuple, Optional
+
+# Label printing is a best-effort side effect: it must never block the test
+# flow or affect the pass/fail result. A disconnected printer is skipped
+# instantly; an unresponsive one is bounded by this timeout so it can't hang
+# the fixture. Operators can always reprint a label afterwards.
+PRINTER_DEVICE = "/dev/usb/lp0"
+LABEL_PRINT_TIMEOUT_S = 15.0
+
+
+def _print_label_best_effort(final_ok: bool, measurements: Dict[str, Any]) -> None:
+    """Print the result label without ever blocking the flow or failing the test.
+
+    If the printer device node is missing (printer not connected) we skip
+    immediately. If it is present we attempt the print in a daemon thread
+    bounded by LABEL_PRINT_TIMEOUT_S, so a powered-off / out-of-paper printer
+    that wedges the blocking write can't hang the fixture.
+    """
+    if not os.path.exists(PRINTER_DEVICE):
+        print(f"Label printing: printer not connected ({PRINTER_DEVICE} missing) - skipping; print manually later")
+        return
+
+    def _worker() -> None:
+        try:
+            ok = printer_manager.print_label(final_ok, measurements, refurb=False, work_order="")
+            if not ok:
+                print("Label printing failed; operator can reprint manually later.")
+        except Exception as exc:
+            print(f"Label printing error (non-fatal): {exc}")
+
+    worker = threading.Thread(target=_worker, name="LabelPrint", daemon=True)
+    worker.start()
+    worker.join(LABEL_PRINT_TIMEOUT_S)
+    if worker.is_alive():
+        print(
+            f"Label printing: timed out after {LABEL_PRINT_TIMEOUT_S:.0f}s "
+            "(printer unresponsive) - continuing; print manually later"
+        )
 
 
 # Always-on stdout tee. Mirrors every print() to log/app_<timestamp>.log so the
@@ -1527,15 +1565,10 @@ def run_bolt_test(app: gui.App, skip_cal: bool = False) -> BoltTest:
 
         print(f"Time to complete Bolt test: {time.time() - start_time:.2f}s")
 
-        # Label printing – always execute, even on failure
-        try:
-            # work_order is not used in the Bolt fixture yet; pass an empty string.
-            print_success = printer_manager.print_label(final_ok, test.measurements, refurb=False, work_order="")
-            if not print_success:
-                print("Label printing failed; operator can reprint manually later.")
-        except Exception as exc:
-            # If running on a development machine without the printer, just log.
-            print(f"Skipping label printing due to error: {exc}")
+        # Label printing – best-effort only. A missing or unresponsive printer
+        # must never block the flow or mark the board as failed; labels can be
+        # reprinted afterwards.
+        _print_label_best_effort(final_ok, test.measurements)
 
         # Write test results to CSV – always execute, even on failure
         try:
