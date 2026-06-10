@@ -102,6 +102,11 @@ from serial import SerialException  # type: ignore[import-not-found]
 FW_FOLDER_PATH = "/home/boltfixturepi/bolt-pcba-test-fixture/fw"
 TEST_FW_FILENAME = "bolt-test-fw-060rc.hex"
 PRODUCTION_FW_FILENAME = "bolt-prod-fw-060rc.hex"
+SG_PRODUCTION_FW_FILENAME = "bolt-sg-prod-fw.hex"
+
+# CSV cell value recorded for tests skipped in strain-gauge (--SG) mode. Truthy
+# on purpose so evaluate_overall_result() treats the skipped tests as passing.
+SG_SKIPPED_RESULT = "sg"
 
 tests_template: Dict[str, Any] = {
     "qr_scan": False,
@@ -504,8 +509,9 @@ class BoltTest:
             self.failure = True
         return self.tests["flash_test_fw"]
 
-    def flash_production_firmware(self) -> bool:
-        fw_path = os.path.join(FW_FOLDER_PATH, PRODUCTION_FW_FILENAME)
+    def flash_production_firmware(self, sg: bool = False) -> bool:
+        fw_filename = SG_PRODUCTION_FW_FILENAME if sg else PRODUCTION_FW_FILENAME
+        fw_path = os.path.join(FW_FOLDER_PATH, fw_filename)
         try:
             ppk2.set_to_source_mode()
             ppk2.toggle_DUT_power_ON()
@@ -1245,7 +1251,7 @@ def prompt_for_bolt_qr(app: gui.App) -> str:
     return qr_payload
 
 
-def run_bolt_test(app: gui.App, skip_cal: bool = False) -> BoltTest:
+def run_bolt_test(app: gui.App, skip_cal: bool = False, sg: bool = False) -> BoltTest:
     test = BoltTest()
     start_time = time.time()
 
@@ -1321,11 +1327,16 @@ def run_bolt_test(app: gui.App, skip_cal: bool = False) -> BoltTest:
         app.update_test_indicator(4, True)
 
         # Indicator 5: IMU test (manual rotation).
-        app.imu_instruction_window()
-        if not test.run_imu_test():
-            app.update_test_indicator(5, False)
-            return test
-        app.update_test_indicator(5, True)
+        if sg:
+            print("IMU test: --SG set; skipping IMU test and recording result as 'sg'.")
+            test.tests["imu"] = SG_SKIPPED_RESULT
+            app.update_test_indicator(5, True)
+        else:
+            app.imu_instruction_window()
+            if not test.run_imu_test():
+                app.update_test_indicator(5, False)
+                return test
+            app.update_test_indicator(5, True)
 
         # Indicator 6: BLE test.
         # Tee stdout across the whole BLE cycle (orchestrator + every
@@ -1365,7 +1376,11 @@ def run_bolt_test(app: gui.App, skip_cal: bool = False) -> BoltTest:
         app.update_test_indicator(6, True)
 
         # Indicator 7: analog calibration.
-        if skip_cal:
+        if sg:
+            print("Analog cal: --SG set; skipping calibration and recording result as 'sg'.")
+            test.tests["analog"] = SG_SKIPPED_RESULT
+            app.update_test_indicator(7, True)
+        elif skip_cal:
             print("Analog cal: --SKIP_CAL set; skipping calibration and marking as passed.")
             test.tests["analog"] = True
             upload_results.mark_skipped("analog calibration skipped via --SKIP_CAL")
@@ -1377,8 +1392,20 @@ def run_bolt_test(app: gui.App, skip_cal: bool = False) -> BoltTest:
             app.update_test_indicator(7, True)
 
         # Indicator 8 + 9: gate — production flash + sleep current (or skip both)
-        sleep_current_choice = app.sleep_current_window()
-        if sleep_current_choice == 2:
+        if sg:
+            # SG mode: flash the SG production firmware, skip the sleep
+            # current test entirely and record it as 'sg' in the CSV.
+            sleep_current_choice = 2  # behave as "skipped" for the PPK2 error paths below
+            if not test.flash_production_firmware(sg=True):
+                app.update_test_indicator(8, False)
+                return test
+            app.update_test_indicator(8, True)
+            print("Sleep current: --SG set; skipping sleep current test and recording result as 'sg'.")
+            test.tests["sleep_current"] = SG_SKIPPED_RESULT
+            test.measurements["sleep_current_ua"] = SG_SKIPPED_RESULT
+            app.update_test_indicator(9, True)
+            sleep_test_result = True
+        elif (sleep_current_choice := app.sleep_current_window()) == 2:
             print("Operator skipped production flash and sleep current test.")
             test.tests["flash_production_fw"] = True
             test.tests["sleep_current"] = True
@@ -1594,10 +1621,26 @@ def main() -> None:
         action="store_true",
         help="Skip the analog calibration test and mark it as passed (green).",
     )
+    parser.add_argument(
+        "--SG",
+        action="store_true",
+        help=(
+            "Strain-gauge mode: skip the analog calibration, IMU and sleep "
+            "current tests (recorded as 'sg' in the CSV) and flash "
+            f"{SG_PRODUCTION_FW_FILENAME} as the production firmware."
+        ),
+    )
     args = parser.parse_args()
     skip_cal = args.SKIP_CAL
+    sg = args.SG
     if skip_cal:
         print("Startup: --SKIP_CAL enabled; analog calibration will be skipped and marked green.")
+    if sg:
+        print(
+            "Startup: --SG enabled; calibration, IMU and sleep current tests will be "
+            f"skipped (CSV records 'sg') and {SG_PRODUCTION_FW_FILENAME} will be flashed "
+            "as production firmware."
+        )
 
     app = gui.App()
     # Route GUI display through the persistent tee instead of replacing
@@ -1634,7 +1677,7 @@ def main() -> None:
     while True:
         app.reset_indicators()
         app.update_test_display(state="active")
-        bolt_test = run_bolt_test(app, skip_cal=skip_cal)
+        bolt_test = run_bolt_test(app, skip_cal=skip_cal, sg=sg)
 
         # Check if the PPK2 dropped off the USB bus - the operator was prompted
         # to replug it, so exit the loop to close the app for a clean restart.
