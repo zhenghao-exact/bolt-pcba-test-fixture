@@ -570,32 +570,38 @@ class BoltTest:
         if not bolt_id:
             return False
 
-        try:
-            ok = bolt_control.set_pcba_serial(self.ser, str(bolt_id))
-        except Exception as exc:
-            print(f"Set serial: exception during settings write: {exc}")
-            ok = False
-
-        if not ok:
-            print("Set serial: first attempt failed; retrying after UART reopen...")
-            if self.ser:
-                try:
-                    self.ser.close()
-                except Exception:
-                    pass
-                self.ser = None
-
-            if not self.open_serial_port(max_retries=1):
-                self.tests["set_serial"] = False
-                self.failure = True
-                return False
+        # Attempt the settings write up to 3 times. Between failed attempts,
+        # reopen the DUT UART (the CH341 bridge can drop/re-enumerate during
+        # the write, which invalidates the existing Serial handle).
+        max_attempts = 3
+        ok = False
+        for attempt in range(1, max_attempts + 1):
             try:
                 ok = bolt_control.set_pcba_serial(self.ser, str(bolt_id))
             except Exception as exc:
-                print(f"Set serial: exception during retry: {exc}")
+                print(f"Set serial: exception during settings write (attempt {attempt}/{max_attempts}): {exc}")
                 ok = False
 
+            if ok:
+                break
+
+            if attempt < max_attempts:
+                print(f"Set serial: attempt {attempt}/{max_attempts} failed; retrying after UART reopen...")
+                if self.ser:
+                    try:
+                        self.ser.close()
+                    except Exception:
+                        pass
+                    self.ser = None
+
+                if not self.open_serial_port(max_retries=1):
+                    print("Set serial: failed to reopen DUT UART for retry; aborting set serial")
+                    self.tests["set_serial"] = False
+                    self.failure = True
+                    return False
+
         if not ok:
+            print(f"Set serial: all {max_attempts} attempts failed")
             self.tests["set_serial"] = False
             self.failure = True
             return False

@@ -23,48 +23,14 @@ import os
 import sys
 import time
 import subprocess
-import threading
 import csv
 import re
 from datetime import datetime
 from typing import Dict, Any, Tuple, Optional
 
-# Label printing is a best-effort side effect: it must never block the test
-# flow or affect the pass/fail result. A disconnected printer is skipped
-# instantly; an unresponsive one is bounded by this timeout so it can't hang
-# the fixture. Operators can always reprint a label afterwards.
-PRINTER_DEVICE = "/dev/usb/lp0"
-LABEL_PRINT_TIMEOUT_S = 15.0
-
-
-def _print_label_best_effort(final_ok: bool, measurements: Dict[str, Any]) -> None:
-    """Print the result label without ever blocking the flow or failing the test.
-
-    If the printer device node is missing (printer not connected) we skip
-    immediately. If it is present we attempt the print in a daemon thread
-    bounded by LABEL_PRINT_TIMEOUT_S, so a powered-off / out-of-paper printer
-    that wedges the blocking write can't hang the fixture.
-    """
-    if not os.path.exists(PRINTER_DEVICE):
-        print(f"Label printing: printer not connected ({PRINTER_DEVICE} missing) - skipping; print manually later")
-        return
-
-    def _worker() -> None:
-        try:
-            ok = printer_manager.print_label(final_ok, measurements, refurb=False, work_order="")
-            if not ok:
-                print("Label printing failed; operator can reprint manually later.")
-        except Exception as exc:
-            print(f"Label printing error (non-fatal): {exc}")
-
-    worker = threading.Thread(target=_worker, name="LabelPrint", daemon=True)
-    worker.start()
-    worker.join(LABEL_PRINT_TIMEOUT_S)
-    if worker.is_alive():
-        print(
-            f"Label printing: timed out after {LABEL_PRINT_TIMEOUT_S:.0f}s "
-            "(printer unresponsive) - continuing; print manually later"
-        )
+# NOTE: Unlike bolt_fixture_main.py, this headless runner intentionally does
+# NOT print result labels or upload results to Google Drive. It only writes the
+# local CSV. (No printer_manager / upload_to_drive usage here.)
 
 
 # Always-on stdout tee. Mirrors every print() to log/app_<timestamp>.log so the
@@ -108,7 +74,6 @@ _persistent_tee = _install_persistent_tee()
 
 import nrfjprog
 import ppk2
-import printer_manager
 import csv_manager
 import upload_results
 
@@ -589,32 +554,38 @@ class BoltTest:
         if not bolt_id:
             return False
 
-        try:
-            ok = bolt_control.set_pcba_serial(self.ser, str(bolt_id))
-        except Exception as exc:
-            print(f"Set serial: exception during settings write: {exc}")
-            ok = False
-
-        if not ok:
-            print("Set serial: first attempt failed; retrying after UART reopen...")
-            if self.ser:
-                try:
-                    self.ser.close()
-                except Exception:
-                    pass
-                self.ser = None
-
-            if not self.open_serial_port(max_retries=1):
-                self.tests["set_serial"] = False
-                self.failure = True
-                return False
+        # Attempt the settings write up to 3 times. Between failed attempts,
+        # reopen the DUT UART (the CH341 bridge can drop/re-enumerate during
+        # the write, which invalidates the existing Serial handle).
+        max_attempts = 3
+        ok = False
+        for attempt in range(1, max_attempts + 1):
             try:
                 ok = bolt_control.set_pcba_serial(self.ser, str(bolt_id))
             except Exception as exc:
-                print(f"Set serial: exception during retry: {exc}")
+                print(f"Set serial: exception during settings write (attempt {attempt}/{max_attempts}): {exc}")
                 ok = False
 
+            if ok:
+                break
+
+            if attempt < max_attempts:
+                print(f"Set serial: attempt {attempt}/{max_attempts} failed; retrying after UART reopen...")
+                if self.ser:
+                    try:
+                        self.ser.close()
+                    except Exception:
+                        pass
+                    self.ser = None
+
+                if not self.open_serial_port(max_retries=1):
+                    print("Set serial: failed to reopen DUT UART for retry; aborting set serial")
+                    self.tests["set_serial"] = False
+                    self.failure = True
+                    return False
+
         if not ok:
+            print(f"Set serial: all {max_attempts} attempts failed")
             self.tests["set_serial"] = False
             self.failure = True
             return False
@@ -1777,24 +1748,14 @@ def run_bolt_test(ui: ConsoleUI, skip_cal: bool = False, sg: bool = False) -> Bo
 
         print(f"Time to complete Bolt test: {time.time() - start_time:.2f}s")
 
-        # Label printing – best-effort only. A missing or unresponsive printer
-        # must never block the flow or mark the board as failed; labels can be
-        # reprinted afterwards.
-        _print_label_best_effort(final_ok, test.measurements)
-
-        # Write test results to CSV – always execute, even on failure
+        # Write test results to CSV – always execute, even on failure.
+        # This headless runner intentionally does NOT print a label or upload
+        # results to Google Drive (unlike bolt_fixture_main.py).
         try:
             csv_manager.write_test_results(test.tests, test.measurements, user="N/A", fixture=1)
             print("Test results written to CSV")
         except Exception as exc:
             print(f"Failed to write CSV results: {exc}")
-
-        # Upload test results to Google Drive – always execute, even on failure
-        try:
-            upload_results.upload_to_drive()
-            print("Test results uploaded to Google Drive")
-        except Exception as exc:
-            print(f"Failed to upload results to Google Drive: {exc}")
 
     return test
 
