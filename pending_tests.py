@@ -36,17 +36,32 @@ def _path(bolt_id: str) -> str:
     return os.path.join(PENDING_DIR, f"{safe}.json")
 
 
-def is_resumable(tests: Dict[str, Any]) -> bool:
-    """True if every prerequisite test passed but sleep current did not.
+def prereqs_passed(tests: Dict[str, Any]) -> bool:
+    """True if every prerequisite test (everything up to the sleep stage) passed.
 
-    A truthy value (including the 'sg' sentinel) counts as passed for the
-    prerequisites; sleep current must be falsy for the board to be resumable.
+    A truthy value (including the 'sg' sentinel) counts as passed.
     """
-    if tests.get("final"):
+    return all(tests.get(k) for k in RESUMABLE_PREREQS)
+
+
+def sleep_stage_complete(tests: Dict[str, Any], measurements: Dict[str, Any]) -> bool:
+    """True if the production flash + sleep current stage genuinely finished.
+
+    "Finished" means a real measured sleep-current pass, or SG mode (where the
+    stage is intentionally not required). An operator-skipped/deferred stage or a
+    failed sleep current does NOT count as finished — those boards stay resumable
+    so a re-scan can come back and complete them.
+    """
+    sc = tests.get("sleep_current")
+    if not sc:
+        return False  # failed or never run
+    if sc == "sg":
+        return True  # SG mode: stage intentionally skipped, board is complete
+    # sleep_current is truthy: complete only if it was actually measured, not
+    # marked skipped/deferred by the operator.
+    if measurements.get("sleep_current_skipped") or measurements.get("sleep_current_ua") == "SKIPPED":
         return False
-    if not all(tests.get(k) for k in RESUMABLE_PREREQS):
-        return False
-    return not tests.get("sleep_current")
+    return True
 
 
 def save(bolt_id: str, tests: Dict[str, Any], measurements: Dict[str, Any]) -> None:

@@ -1268,9 +1268,16 @@ def _update_pending_state(test: BoltTest) -> None:
     bolt_id = test.measurements.get("bolt_id")
     if not bolt_id:
         return
-    if test.tests.get("final"):
+    # Only boards that got through every test up to the sleep stage are
+    # candidates; if they didn't, leave any existing state untouched.
+    if not pending_tests.prereqs_passed(test.tests):
+        return
+    if pending_tests.sleep_stage_complete(test.tests, test.measurements):
+        # Sleep current genuinely measured-and-passed (or SG): board is done.
         pending_tests.clear(bolt_id)
-    elif pending_tests.is_resumable(test.tests):
+    else:
+        # Sleep stage skipped/deferred or failed: keep it resumable so a re-scan
+        # can come back and complete the production flash + sleep current.
         pending_tests.save(bolt_id, test.tests, test.measurements)
 
 
