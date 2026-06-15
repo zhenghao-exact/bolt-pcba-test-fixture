@@ -30,6 +30,7 @@ class App(Tk):
         self.reboot_pi_var = IntVar()
         self.ble_retry_var = IntVar()
         self.sleep_current_ready_var = IntVar()
+        self.pending_resume_var = IntVar()
 
         # self.attributes("-fullscreen", True)
         self.bind("<Escape>", self.end_fullscreen)
@@ -755,6 +756,59 @@ class App(Tk):
 
         self.ppk2_lost_var.set(0)
         self.wait_variable(self.ppk2_lost_var)
+
+    # Opens a popup offering to resume a partially-completed board
+    def pending_tests_window(self, bolt_id, summary: str = "") -> bool:
+        """
+        Show a popup when a re-scanned board has saved "pending" state: it passed
+        every test through analog calibration on a previous run, but the
+        production flash + sleep current stage did not complete.
+
+        Returns True if the operator chooses to RESUME (skip the passed steps and
+        re-run production flash + sleep current), False to run a full test from
+        scratch.
+        """
+        pending_popup = Toplevel(padx=20, pady=20)
+        pending_popup.protocol("WM_DELETE_WINDOW", self.disable_event)
+
+        def resume():
+            self.pending_resume_var.set(1)
+            pending_popup.destroy()
+            return
+
+        def full_retest():
+            self.pending_resume_var.set(2)
+            pending_popup.destroy()
+            return
+
+        pending_popup.title("Pending Tests Detected")
+
+        msg = (
+            f"PENDING TESTS DETECTED for {bolt_id}:\n\n"
+            "This board already passed every test through analog calibration on a\n"
+            "previous run; only the production flash + sleep current stage did not\n"
+            "complete.\n\n"
+        )
+        if summary:
+            msg += summary + "\n\n"
+        msg += (
+            "RESUME:       skip the passed steps, re-flash production firmware\n"
+            "              and re-run the sleep current test.\n"
+            "FULL RE-TEST: discard the saved results and test from scratch.\n"
+        )
+
+        label = ttk.Label(pending_popup, text=msg, anchor=W, justify=LEFT)
+        label.config(font=("TkFixedFont", 14))
+        resume_button = ttk.Button(pending_popup, text="RESUME", command=resume)
+        full_button = ttk.Button(pending_popup, text="FULL RE-TEST", command=full_retest)
+
+        label.grid(column=0, row=0, columnspan=2, padx=10, pady=10)
+        resume_button.grid(column=0, row=1, padx=10, pady=10)
+        full_button.grid(column=1, row=1, padx=10, pady=10)
+
+        self.pending_resume_var.set(0)
+        self.wait_variable(self.pending_resume_var)
+        return self.pending_resume_var.get() == 1
 
     # Opens a popup asking the operator to power-cycle the PPK2 via its button
     def ppk2_press_button_window(self):

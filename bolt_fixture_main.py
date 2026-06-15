@@ -92,6 +92,7 @@ import ppk2
 import printer_manager
 import csv_manager
 import upload_results
+import pending_tests
 
 import bolt_control
 from serial import SerialException  # type: ignore[import-not-found]
@@ -1257,6 +1258,22 @@ def prompt_for_bolt_qr(app: gui.App) -> str:
     return qr_payload
 
 
+def _update_pending_state(test: BoltTest) -> None:
+    """Persist or clear resumable state for this board.
+
+    A board that passed everything through analog calibration but did not finish
+    the production flash + sleep current stage is saved so a re-scan can resume.
+    A board that fully passed has any saved state cleared.
+    """
+    bolt_id = test.measurements.get("bolt_id")
+    if not bolt_id:
+        return
+    if test.tests.get("final"):
+        pending_tests.clear(bolt_id)
+    elif pending_tests.is_resumable(test.tests):
+        pending_tests.save(bolt_id, test.tests, test.measurements)
+
+
 def run_bolt_test(app: gui.App, skip_cal: bool = False, sg: bool = False) -> BoltTest:
     test = BoltTest()
     start_time = time.time()
@@ -1291,111 +1308,148 @@ def run_bolt_test(app: gui.App, skip_cal: bool = False, sg: bool = False) -> Bol
 
         app.update_test_indicator(1, True)
 
-        # Indicator 2: flash test firmware.
-        if not test.flash_test_firmware():
-            app.update_test_indicator(2, False)
-            return test
-        app.update_test_indicator(2, True)
-        # After flashing test firmware, issue an explicit debug reset via subprocess
-        # so that the Bolt boots cleanly and USB CDC can enumerate, without requiring
-        # the operator to unplug/re‑plug the USB cable.
-        print("USB: issuing nrfjprog --reset to trigger USB enumeration...")
-        try:
-            result = subprocess.run(
-                ["nrfjprog", "--reset"],
-                capture_output=True,
-                text=True,
-                timeout=10.0,
+        # If this exact board was previously left with only the production flash
+        # + sleep current stage outstanding (it passed everything through analog
+        # calibration), offer to resume instead of redoing all the earlier steps.
+        resuming = False
+        resume_bolt_id = test.measurements.get("bolt_id")
+        pending = pending_tests.load(resume_bolt_id) if resume_bolt_id else None
+        if pending:
+            saved_meas = pending.get("measurements", {})
+            summary = (
+                f"  IMU/BLE/analog: passed (BLE RSSI {saved_meas.get('ble_rssi_median')})\n"
+                f"  Sleep current last result: {saved_meas.get('sleep_current_ua')}"
             )
-            if result.returncode == 0:
-                print("USB: nrfjprog --reset completed successfully")
-                # Give the device a moment to enumerate after reset
-                time.sleep(1.0)
+            if app.pending_tests_window(resume_bolt_id, summary):
+                resuming = True
+                # Carry over the previously-passed results and measurements so the
+                # final CSV row reflects them, and mark their indicators green.
+                test.tests.update(pending.get("tests", {}))
+                for key, value in saved_meas.items():
+                    if key in ("bolt_id", "PCBA_ID", "dev_ID"):
+                        continue  # keep the freshly-scanned identity
+                    test.measurements[key] = value
+                # Force the production flash + sleep current stage to re-run.
+                test.tests["flash_production_fw"] = False
+                test.tests["sleep_current"] = False
+                test.tests["final"] = False
+                test.measurements["sleep_current_skipped"] = False
+                test.measurements["sleep_current_ua"] = None
+                for indicator in range(1, 8):
+                    app.update_test_indicator(indicator, True)
+                print(f"Resume: skipping steps 1-7 for {resume_bolt_id}; re-running production flash + sleep current")
             else:
-                print(f"USB: nrfjprog --reset failed with return code {result.returncode}")
-                print(f"USB: stderr: {result.stderr}")
-        except subprocess.TimeoutExpired:
-            print("USB: nrfjprog --reset timed out after 10 seconds")
-        except Exception as exc:
-            print(f"USB: error running nrfjprog --reset: {exc}")
+                # Operator chose a full re-test: discard the saved state.
+                pending_tests.clear(resume_bolt_id)
 
-        # Indicator 3: USB / shell connection.
-        if not test.open_serial_port():
-            app.update_test_indicator(3, False)
-            return test
-        app.update_test_indicator(3, True)
-        time.sleep(8.0)
-
-        # Indicator 4: set serial on DUT.
-        if not test.program_serial_on_dut():
-            app.update_test_indicator(4, False)
-            return test
-        app.update_test_indicator(4, True)
-
-        # Indicator 5: IMU test (manual rotation).
-        if sg:
-            print("IMU test: --SG set; skipping IMU test and recording result as 'sg'.")
-            test.tests["imu"] = SG_SKIPPED_RESULT
-            app.update_test_indicator(5, True)
-        else:
-            app.imu_instruction_window()
-            if not test.run_imu_test():
-                app.update_test_indicator(5, False)
+        # Steps 2-7 (provisioning + functional checks). Skipped entirely when
+        # resuming a board that already passed them on a previous run.
+        if not resuming:
+            # Indicator 2: flash test firmware.
+            if not test.flash_test_firmware():
+                app.update_test_indicator(2, False)
                 return test
-            app.update_test_indicator(5, True)
-
-        # Indicator 6: BLE test.
-        # Tee stdout across the whole BLE cycle (orchestrator + every
-        # subprocess attempt + fallback scan) so the full transcript can be
-        # written to log/ble_fail_<id>_<ts>.log if the cycle fails.
-        ble_tee = _TeeStdout(sys.stdout)
-        original_stdout = sys.stdout
-        sys.stdout = ble_tee
-        try:
-            ble_ok = test.run_ble_test()
-        finally:
-            sys.stdout = original_stdout
-
-        if not ble_ok:
+            app.update_test_indicator(2, True)
+            # After flashing test firmware, issue an explicit debug reset via subprocess
+            # so that the Bolt boots cleanly and USB CDC can enumerate, without requiring
+            # the operator to unplug/re‑plug the USB cable.
+            print("USB: issuing nrfjprog --reset to trigger USB enumeration...")
             try:
-                ble_bolt_id = test.measurements.get("bolt_id", "unknown") or "unknown"
-                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                os.makedirs(BLE_LOG_DIR, exist_ok=True)
-                log_path = os.path.join(
-                    BLE_LOG_DIR,
-                    f"ble_fail_{ble_bolt_id}_{timestamp_str}.log",
+                result = subprocess.run(
+                    ["nrfjprog", "--reset"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10.0,
                 )
-                with open(log_path, "w") as logfile:
-                    logfile.write(ble_tee.getvalue())
-                print(f"BLE test: failure log saved to {log_path}")
+                if result.returncode == 0:
+                    print("USB: nrfjprog --reset completed successfully")
+                    # Give the device a moment to enumerate after reset
+                    time.sleep(1.0)
+                else:
+                    print(f"USB: nrfjprog --reset failed with return code {result.returncode}")
+                    print(f"USB: stderr: {result.stderr}")
+            except subprocess.TimeoutExpired:
+                print("USB: nrfjprog --reset timed out after 10 seconds")
             except Exception as exc:
-                print(f"BLE test: failed to write failure log: {exc}")
+                print(f"USB: error running nrfjprog --reset: {exc}")
 
-            app.update_test_indicator(6, False)
-            if test.ble_first_failure:
-                # First BLE failure: inform operator and abort this run
-                app.ble_retry_window()
+            # Indicator 3: USB / shell connection.
+            if not test.open_serial_port():
+                app.update_test_indicator(3, False)
+                return test
+            app.update_test_indicator(3, True)
+            time.sleep(8.0)
+
+            # Indicator 4: set serial on DUT.
+            if not test.program_serial_on_dut():
+                app.update_test_indicator(4, False)
+                return test
+            app.update_test_indicator(4, True)
+
+            # Indicator 5: IMU test (manual rotation).
+            if sg:
+                print("IMU test: --SG set; skipping IMU test and recording result as 'sg'.")
+                test.tests["imu"] = SG_SKIPPED_RESULT
+                app.update_test_indicator(5, True)
+            else:
+                app.imu_instruction_window()
+                if not test.run_imu_test():
+                    app.update_test_indicator(5, False)
+                    return test
+                app.update_test_indicator(5, True)
+
+            # Indicator 6: BLE test.
+            # Tee stdout across the whole BLE cycle (orchestrator + every
+            # subprocess attempt + fallback scan) so the full transcript can be
+            # written to log/ble_fail_<id>_<ts>.log if the cycle fails.
+            ble_tee = _TeeStdout(sys.stdout)
+            original_stdout = sys.stdout
+            sys.stdout = ble_tee
+            try:
+                ble_ok = test.run_ble_test()
+            finally:
+                sys.stdout = original_stdout
+
+            if not ble_ok:
+                try:
+                    ble_bolt_id = test.measurements.get("bolt_id", "unknown") or "unknown"
+                    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    os.makedirs(BLE_LOG_DIR, exist_ok=True)
+                    log_path = os.path.join(
+                        BLE_LOG_DIR,
+                        f"ble_fail_{ble_bolt_id}_{timestamp_str}.log",
+                    )
+                    with open(log_path, "w") as logfile:
+                        logfile.write(ble_tee.getvalue())
+                    print(f"BLE test: failure log saved to {log_path}")
+                except Exception as exc:
+                    print(f"BLE test: failed to write failure log: {exc}")
+
+                app.update_test_indicator(6, False)
+                if test.ble_first_failure:
+                    # First BLE failure: inform operator and abort this run
+                    app.ble_retry_window()
+                    return test
+                else:
+                    # Subsequent failures: behave as current (normal board fail)
+                    return test
+            app.update_test_indicator(6, True)
+
+            # Indicator 7: analog calibration.
+            if sg:
+                print("Analog cal: --SG set; skipping calibration and recording result as 'sg'.")
+                test.tests["analog"] = SG_SKIPPED_RESULT
+                app.update_test_indicator(7, True)
+            elif skip_cal:
+                print("Analog cal: --SKIP_CAL set; skipping calibration and marking as passed.")
+                test.tests["analog"] = True
+                upload_results.mark_skipped("analog calibration skipped via --SKIP_CAL")
+                app.update_test_indicator(7, True)
+            elif not test.run_analog_calibration():
+                app.update_test_indicator(7, False)
                 return test
             else:
-                # Subsequent failures: behave as current (normal board fail)
-                return test
-        app.update_test_indicator(6, True)
-
-        # Indicator 7: analog calibration.
-        if sg:
-            print("Analog cal: --SG set; skipping calibration and recording result as 'sg'.")
-            test.tests["analog"] = SG_SKIPPED_RESULT
-            app.update_test_indicator(7, True)
-        elif skip_cal:
-            print("Analog cal: --SKIP_CAL set; skipping calibration and marking as passed.")
-            test.tests["analog"] = True
-            upload_results.mark_skipped("analog calibration skipped via --SKIP_CAL")
-            app.update_test_indicator(7, True)
-        elif not test.run_analog_calibration():
-            app.update_test_indicator(7, False)
-            return test
-        else:
-            app.update_test_indicator(7, True)
+                app.update_test_indicator(7, True)
 
         # Indicator 8 + 9: gate — production flash + sleep current (or skip both)
         if sg:
@@ -1592,6 +1646,11 @@ def run_bolt_test(app: gui.App, skip_cal: bool = False, sg: bool = False) -> Bol
         app.update_test_indicator(10, final_ok)
 
     finally:
+        # Persist or clear resumable state for this board first, so it runs on
+        # every exit path — including the PPK2-lost / abnormal-reading early
+        # returns below, which are exactly the cases worth resuming.
+        _update_pending_state(test)
+
         # Always execute these, even on early return
         # Skip normal finalization if the PPK2 was lost from the USB bus
         # (fixture/cable issue, not a board failure — operator has been prompted
