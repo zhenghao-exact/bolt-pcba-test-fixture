@@ -139,6 +139,58 @@ def restart_ppk2() -> bool:
     print("PPK2 restart: device re-initialised and measuring")
     return True
     
+def reacquire_ppk2(timeout_s: float = 20.0) -> bool:
+    """
+    Re-grab the PPK2 after the operator has physically power-cycled it
+    (pressed the button on the PPK2 to restart it).
+
+    Unlike restart_ppk2(), which lists the bus once after a 1 s wait, this polls
+    for the device to re-enumerate for up to timeout_s seconds — a hardware
+    power-cycle can take a few seconds to come back. Once the device reappears it
+    is re-initialised exactly like the import-time grab / restart_ppk2().
+
+    Returns True once the device is back up and measuring, False on timeout.
+    """
+    global ppk2_device, device_available
+
+    # Best-effort teardown of any stale handle.
+    if ppk2_device is not None:
+        for action in (
+            lambda: ppk2_device.stop_measuring(),
+            lambda: ppk2_device.ser.close(),
+        ):
+            try:
+                action()
+            except Exception as exc:
+                print(f"PPK2 reacquire: ignoring teardown error: {exc}")
+    ppk2_device = None
+    device_available = False
+
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        new_devices = _sort_devices_by_port(PPK2_API.list_devices())
+        if len(new_devices) in (1, 2):
+            try:
+                dev = PPK2_API(new_devices[0], timeout=1, write_timeout=1)
+                dev.get_modifiers()
+                dev.use_source_meter()
+                dev.set_source_voltage(3300)
+                dev.toggle_DUT_power("ON")
+                dev.start_measuring()
+            except Exception as exc:
+                print(f"PPK2 reacquire: re-init failed, retrying: {exc}")
+                time.sleep(1.0)
+                continue
+            ppk2_device = dev
+            device_available = True
+            print("PPK2 reacquire: device re-grabbed and measuring")
+            return True
+        time.sleep(0.5)
+
+    print(f"PPK2 reacquire: device did not re-enumerate within {timeout_s:.0f}s")
+    return False
+
+
 def device_present() -> bool:
     """
     Return True if at least one PPK2 is currently enumerated on the USB bus.

@@ -26,6 +26,7 @@ class App(Tk):
         self.sleep_current_var = IntVar(value=0)
         self.restart_fixture_var = IntVar()
         self.ppk2_lost_var = IntVar()
+        self.ppk2_button_var = IntVar()
         self.reboot_pi_var = IntVar()
         self.ble_retry_var = IntVar()
         self.sleep_current_ready_var = IntVar()
@@ -754,6 +755,45 @@ class App(Tk):
 
         self.ppk2_lost_var.set(0)
         self.wait_variable(self.ppk2_lost_var)
+
+    # Opens a popup asking the operator to power-cycle the PPK2 via its button
+    def ppk2_press_button_window(self):
+        """
+        Show a popup when the PPK2 is stuck on the hardware side and a software
+        restart could not recover it. Instructs the operator to press the button
+        on the PPK2 (next to the write/VOUT line) to power-cycle it, then press
+        OK so the fixture re-grabs the device and retries.
+        """
+        ppk2_button_popup = Toplevel(padx=20, pady=20)
+        ppk2_button_popup.protocol("WM_DELETE_WINDOW", self.disable_event)
+
+        def acknowledge():
+            self.ppk2_button_var.set(1)
+            ppk2_button_popup.destroy()
+            return
+
+        ppk2_button_popup.title("Restart PPK2")
+
+        msg = (
+            "PPK2 NOT RESPONDING:\n\n"
+            "The PPK2 is stuck and a software restart did not recover it.\n"
+            "This is a fixture issue, not a board failure.\n\n"
+            "To recover:\n"
+            "  1. Press the button on the PPK2 (next to the write/VOUT line)\n"
+            "     to power-cycle it.\n"
+            "  2. Wait for the PPK2 LED to come back on.\n"
+            "  3. Press OK below — the fixture will re-grab the PPK2 and retry.\n"
+        )
+
+        label = ttk.Label(ppk2_button_popup, text=msg, anchor=W, justify=LEFT)
+        label.config(font=("TkFixedFont", 14))
+        ok_button = ttk.Button(ppk2_button_popup, text="OK", command=acknowledge)
+
+        label.grid(column=0, row=0, padx=10, pady=10)
+        ok_button.grid(column=0, row=1, padx=10, pady=10)
+
+        self.ppk2_button_var.set(0)
+        self.wait_variable(self.ppk2_button_var)
 
     # Opens a popup asking the operator to confirm rebooting the Raspberry Pi
     def reboot_pi_window(self) -> bool:

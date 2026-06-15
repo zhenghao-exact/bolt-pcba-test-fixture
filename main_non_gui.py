@@ -1320,6 +1320,14 @@ class ConsoleUI:
         print("Close this app, replug the PPK2 (check the cable/power switch), then reopen the fixture.")
         input("Press ENTER to acknowledge... ")
 
+    def ppk2_press_button_window(self) -> None:
+        print("\n*** PPK2 NOT RESPONDING ***")
+        print("The PPK2 is stuck and a software restart did not recover it.")
+        print("This is a fixture issue, not a board failure.")
+        print("  1. Press the button on the PPK2 (next to the write/VOUT line) to power-cycle it.")
+        print("  2. Wait for the PPK2 LED to come back on.")
+        input("  3. Press ENTER — the fixture will re-grab the PPK2 and retry... ")
+
     def restart_fixture_window(self) -> None:
         print("\n*** ABNORMAL PPK2 READING DETECTED ***")
         print("This is a fixture issue, not a board failure. Please restart the fixture application.")
@@ -1595,32 +1603,50 @@ def run_bolt_test(ui: ConsoleUI, skip_cal: bool = False, sg: bool = False) -> Bo
                 original_stdout = sys.stdout
                 sys.stdout = sleep_tee
                 try:
-                    # Auto-retry on any out-of-range sleep current result. Mirrors
-                    # the BLE retry loop: no prompt between attempts —
-                    # restart_ppk2() tears down + re-discovers the PPK2 handle
-                    # (no operator power-cycle required) and we re-run the
-                    # measurement.
+                    # Auto-retry on any out-of-range sleep current result.
+                    # Recovery escalates: first a no-touch software restart
+                    # (restart_ppk2() tears down + re-discovers the handle). If
+                    # the PPK2 is stuck on the hardware side and the software
+                    # restart can't bring it back, prompt the operator to press
+                    # the button on the PPK2 to power-cycle it, then re-grab the
+                    # handle (reacquire_ppk2()) and retry.
                     max_attempts = 4  # 1 initial + 3 retries
                     sleep_test_result = False
                     for attempt in range(1, max_attempts + 1):
                         sleep_test_result = test.run_sleep_current_test()
                         if sleep_test_result:
                             break
-                        # If the PPK2 has physically dropped off the USB bus,
-                        # retrying is futile — re-discovery returns no device and
-                        # every further attempt just crashes on a None handle.
-                        # Abort the retry loop and escalate to the replug prompt.
-                        if test.ppk2_lost or not ppk2.device_present():
-                            test.ppk2_lost = True
-                            print("Sleep current: PPK2 lost from USB bus - aborting retries, operator must replug")
+                        if attempt >= max_attempts:
                             break
-                        if attempt < max_attempts:
+
+                        # Prefer a no-touch software restart when the PPK2 is
+                        # still on the bus and wasn't flagged lost.
+                        software_ok = False
+                        if ppk2.device_present() and not test.ppk2_lost:
                             print(f"Sleep current: attempt {attempt}/{max_attempts} failed; restarting PPK2 and retrying")
-                            if not ppk2.restart_ppk2():
-                                print("Sleep current: PPK2 restart failed; device not found on bus - aborting retries")
+                            software_ok = ppk2.restart_ppk2()
+                            if not software_ok:
+                                print("Sleep current: software PPK2 restart failed")
+
+                        if not software_ok:
+                            # Hardware-stuck PPK2: ask the operator to press the
+                            # button on the PPK2 to power-cycle it, then re-grab
+                            # the handle. Retry a couple of times before giving up.
+                            recovered = False
+                            for btn_try in range(1, 3):
+                                print(f"Sleep current: PPK2 stuck - requesting operator power-cycle (try {btn_try}/2)")
+                                ui.ppk2_press_button_window()
+                                if ppk2.reacquire_ppk2():
+                                    recovered = True
+                                    break
+                                print("Sleep current: PPK2 still not detected after button press")
+                            if not recovered:
                                 test.ppk2_lost = True
+                                print("Sleep current: PPK2 unrecoverable after button-press recovery - aborting retries")
                                 break
-                            time.sleep(1.0)
+                            test.ppk2_lost = False
+
+                        time.sleep(1.0)
                 finally:
                     sys.stdout = original_stdout
 
