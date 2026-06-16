@@ -1472,17 +1472,11 @@ def run_bolt_test(app: gui.App, skip_cal: bool = False, sg: bool = False) -> Bol
             test.measurements["sleep_current_ua"] = SG_SKIPPED_RESULT
             app.update_test_indicator(9, True)
             sleep_test_result = True
-        elif (sleep_current_choice := app.sleep_current_window()) == 2:
-            print("Operator skipped production flash and sleep current test.")
-            test.tests["flash_production_fw"] = True
-            test.tests["sleep_current"] = True
-            test.measurements["sleep_current_ua"] = "SKIPPED"
-            test.measurements["sleep_current_skipped"] = True
-            app.update_test_indicator(8, True)
-            app.update_test_indicator(9, True)
-            upload_results.mark_skipped("sleep current flow skipped by operator")
-            sleep_test_result = True
         else:
+            # No pre-flash prompt: after analog calibration, always flash the
+            # production firmware, then prompt the operator to ready the board for
+            # the sleep current measurement.
+            sleep_current_choice = 1  # always "proceed" (used by the PPK2 error paths)
             if not test.flash_production_firmware():
                 app.update_test_indicator(8, False)
                 return test
