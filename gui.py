@@ -279,11 +279,9 @@ class App(Tk):
         popup.title("Ready for Sleep Current")
 
         msg = (
-            "PRODUCTION FIRMWARE READY TO FLASH\n\n"
-
-            "About to flash production firmware and run the sleep current test.\n\n"
-            "OK — proceed.\n"
-            "SKIP — skip both steps (marked passed/skipped; no flash or measurement)."        
+            "About to run the sleep current test.\n\n"
+            "Please detach the flashing cable and usb serial line to the PCBA.\n\n"
+            "Press OK to proceed.\n\n"     
         )
 
         label = ttk.Label(popup, text=msg, anchor=W, justify=LEFT)
