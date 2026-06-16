@@ -17,7 +17,6 @@ class App(Tk):
         self.pcba_barcode_scan_var = IntVar()
         self.stop_test_var = IntVar()
         self.imu_instruction_var = IntVar()
-        self.sleep_current_var = IntVar(value=0)
         self.restart_fixture_var = IntVar()
         self.ppk2_lost_var = IntVar()
         self.ppk2_button_var = IntVar()
@@ -211,69 +210,16 @@ class App(Tk):
         self.imu_instruction_var.set(0)
         self.wait_variable(self.imu_instruction_var)
 
-    # Sleep current test instructions — returns 1 (OK) or 2 (Skip prod flash + sleep test)
-    def sleep_current_window(self) -> int:
-        popup = Toplevel(padx=20, pady=20)
-        popup.protocol("WM_DELETE_WINDOW", self.disable_event)
-        popup.transient(self)
-        try:
-            popup.grab_set()
-        except TclError:
-            pass
-
-        def acknowledge():
-            self.sleep_current_var.set(1)
-            try:
-                popup.grab_release()
-            except TclError:
-                pass
-            popup.destroy()
-
-        def skip_sleep_current():
-            self.sleep_current_var.set(2)
-            try:
-                popup.grab_release()
-            except TclError:
-                pass
-            popup.destroy()
-
-        popup.title("Sleep Current Test — production flash and measurement")
-
-        msg = (
-            "About to run the sleep current test.\n\n"
-            "Please detach the flashing cable and usb serial line to the PCBA.\n\n"
-            "Press OK to proceed.\n\n"
-        )
-
-        label = ttk.Label(popup, text=msg, anchor=W, justify=LEFT)
-        label.config(font=("TkFixedFont", 14))
-        ok_button = ttk.Button(popup, text="OK", command=acknowledge)
-        skip_button = ttk.Button(popup, text="SKIP", command=skip_sleep_current)
-
-        label.grid(column=0, row=0, columnspan=2, padx=10, pady=10)
-        ok_button.grid(column=0, row=1, padx=10, pady=10, sticky=E)
-        skip_button.grid(column=1, row=1, padx=10, pady=10, sticky=W)
-
-        self.sleep_current_var.set(0)
-        self.wait_variable(self.sleep_current_var)
-        self.update_idletasks()
-        return int(self.sleep_current_var.get())
-
-    # USB re‑plug instructions after flashing test firmware
+    # Shown after the production firmware flash + reset: operator confirms the
+    # board is ready (debugger + USB serial detached) before the sleep current
+    # measurement. Acknowledgement only — production never skips this step.
     def ready_for_sleep_current_window(self):
-        """
-        Blocking popup shown after production firmware flash + reset.
-        Operator confirms the board is ready before sleep current measurement.
-        """
+        """Blocking acknowledgement popup before the sleep current measurement."""
         popup = Toplevel(padx=20, pady=20)
         popup.protocol("WM_DELETE_WINDOW", self.disable_event)
 
         def acknowledge():
             self.sleep_current_ready_var.set(1)
-            popup.destroy()
-
-        def skip_sleep_current():
-            self.sleep_current_ready_var.set(2)
             popup.destroy()
 
         popup.title("Ready for Sleep Current")
@@ -287,16 +233,13 @@ class App(Tk):
         label = ttk.Label(popup, text=msg, anchor=W, justify=LEFT)
         label.config(font=("TkFixedFont", 14))
         ok_button = ttk.Button(popup, text="OK", command=acknowledge)
-        skip_button = ttk.Button(popup, text="SKIP", command=skip_sleep_current)
 
         label.grid(column=0, row=0, padx=10, pady=10)
         ok_button.grid(column=0, row=1, padx=10, pady=10)
-        skip_button.grid(column=1, row=1, padx=10, pady=10)
 
         self.sleep_current_ready_var.set(0)
         self.wait_variable(self.sleep_current_ready_var)
         self.update_idletasks()
-        return int(self.sleep_current_ready_var.get())
 
     
     # Opens a pop-up prompting the user to scan the Bolt QR / PCBA barcode
