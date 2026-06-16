@@ -3,7 +3,6 @@ from tkinter import font
 from tkinter import ttk
 import time
 
-
 class App(Tk):
     green  = '#00FF00'
     red    = '#FF0000'
@@ -11,17 +10,12 @@ class App(Tk):
 
     def __init__(self):
         super().__init__()
-        self.test_in_progress = False
-        self.window_closed = False
-        self.dumpster_sample = False
         
         self.pcba_barcode = StringVar()
-        self.usb_replug_var = IntVar()
         self.acknowledge_info_var = IntVar()
         self.test_complete_var = IntVar()
         self.pcba_barcode_scan_var = IntVar()
         self.stop_test_var = IntVar()
-        self.print_label_var = IntVar()
         self.imu_instruction_var = IntVar()
         self.sleep_current_var = IntVar(value=0)
         self.restart_fixture_var = IntVar()
@@ -46,7 +40,6 @@ class App(Tk):
         default_font.config(size=9)
         self.option_add("*Font", "TkFixedFont")
 
-        self.ID_string = StringVar(value = "Bolt PCBA Test Fixture | ID under test: ")
         ttk.Label(self.frame, text="Bolt PCBA Test Fixture").grid(column=0, row=0, columnspan=6)
         
         # Add test features (Bolt-specific 10-step flow)
@@ -152,31 +145,7 @@ class App(Tk):
         return
     
     ## POP-UP WINDOWS ##
-    
-    def no_internet_window(self):
-        no_internet_popup = Toplevel(padx=20, pady=20)
-        no_internet_popup.protocol("WM_DELETE_WINDOW", self.disable_event)
-        
-        information_string = "The device is not currently connected to the internet.\n\n" + \
-                             "Please check connection and try again. The application will shut off now"
-                        
-        def acknowledge_info():
-            self.acknowledge_no_internet_var.set(1)
-            no_internet_popup.destroy()
-            self.destroy()
-            return
-        
-        no_internet_popup.title("No connection")
-        
-        information_label = ttk.Label(no_internet_popup, text=information_string, anchor=W)
-        information_label.config(font=("TkFixedFont", 14))
-        acknowledge_button = ttk.Button(no_internet_popup, text="OK", command=acknowledge_info)
-        
-        information_label.grid(column=0, row=0, columnspan=1)
-        acknowledge_button.grid(column=0, row=1, padx=10, pady=10)
-        
-        return no_internet_popup
-    
+
     # Initial pop-up window when opening the app for the first time.
     def information_window(self):
         information_popup = Toplevel(padx=20, pady=20)
@@ -186,13 +155,12 @@ class App(Tk):
             "BOLT PCBA FIXTURE SETUP:\n\n"
             "1. Ensure the lid is open and no device is on the test bed.\n\n"
             "2. Plug in devices in this order:\n"
-            "   a) Nordic PPK2 (will appear as /dev/ttyACM0).\n"
+            "   a) Nordic PPK2.\n"
             "   b) nRF flashing/debug board.\n"
             "   c) Bolt PCBA USB.\n"
             "   d) Scanner and label printer.\n\n"
             "3. Power on the label printer and ensure it is ready.\n\n"
-            "4. Connect the PPK2 alligator clips and custom Bolt as per the "
-            "fixture diagram.\n"
+            "4. Press OK to begin testing.\n\n"
         )
         
         ## 1 == OK button selected
@@ -227,7 +195,7 @@ class App(Tk):
         msg = (
             "IMU TEST:\n\n"
             "Press OK to begin the IMU test.\n\n"
-            "With in one minute, rotate the Bolt PCBA at least 45° in each direction as shown in \n\n"
+            "With in one minute, rotate the Bolt PCBA at least 22.5° in each direction as shown in \n\n"
             "the work instructions.\n\n"
             "Move it slowly to ensure the IMU can detect the angle change.\n\n"
         )
@@ -323,7 +291,6 @@ class App(Tk):
         ok_button = ttk.Button(popup, text="OK", command=acknowledge)
         skip_button = ttk.Button(popup, text="SKIP", command=skip_sleep_current)
 
-
         label.grid(column=0, row=0, padx=10, pady=10)
         ok_button.grid(column=0, row=1, padx=10, pady=10)
         skip_button.grid(column=1, row=1, padx=10, pady=10)
@@ -333,35 +300,6 @@ class App(Tk):
         self.update_idletasks()
         return int(self.sleep_current_ready_var.get())
 
-    def usb_replug_window(self):
-        popup = Toplevel(padx=20, pady=20)
-        popup.protocol("WM_DELETE_WINDOW", self.disable_event)
-
-        def acknowledge():
-            self.usb_replug_var.set(1)
-            popup.destroy()
-            return
-        
-        popup.title("Reconnect Bolt USB")
-
-        msg = (
-            "PRODUCTION  FIRMWARE FLASHED — USB UNPLUG:\n\n"
-            "1. Disconnect the debugger cable from the Bolt PCBA.\n"
-            "2. Disconnect the Bolt USB cable from the Raspberry Pi.\n"
-            "3. Ensure the PPK2 alligator clips remain connected to the Bolt.\n\n"
-            "Wait a few seconds for the device to re‑enumerate, then press OK."
-        )
-
-        label = ttk.Label(popup, text=msg, anchor=W, justify=LEFT)
-        label.config(font=("TkFixedFont", 14))
-        ok_button = ttk.Button(popup, text="OK", command=acknowledge)
-
-        label.grid(column=0, row=0, padx=10, pady=10)
-        ok_button.grid(column=0, row=1, padx=10, pady=10)
-
-        self.usb_replug_var.set(0)
-        self.wait_variable(self.usb_replug_var)
-    
     
     # Opens a pop-up prompting the user to scan the Bolt QR / PCBA barcode
     def scan_pcba_barcode_window(self):
@@ -416,225 +354,14 @@ class App(Tk):
         self.wait_variable(scan_confirm_var)
         return
 
-
-    # Opens a popup prompting the user to select if the current ID on the DUT should be replaced.
-    def keep_old_id_window(self, id):
-        keep_old_id_popup = Toplevel(padx=20, pady=20)
-        keep_old_id_popup.protocol("WM_DELETE_WINDOW", self.disable_event)
-        
-        ## 1 == yes, 2 == no
-        def set_new_id():
-            self.keep_old_id_var.set(1)
-            keep_old_id_popup.destroy()
-            return
-    
-        def no_new_id():
-            self.keep_old_id_var.set(2)
-            keep_old_id_popup.destroy()
-            return
-        
-        keep_old_id_popup.title("Old ID Detected")
-        
-        keep_old_id_msg     = ttk.Label(keep_old_id_popup, text=f"Device has already been assigned ID {id}.\nWould you like to assign a new one?")
-        keep_old_id_msg.config(font=("TkFixedFont", 16))
-        popup_yes_button    = ttk.Button(keep_old_id_popup, text="YES", command=set_new_id)
-        popup_no_button     = ttk.Button(keep_old_id_popup, text="NO", command=no_new_id)
-        
-        keep_old_id_msg.grid(column=0, row=0, columnspan=2)
-        popup_yes_button.grid(column=0, row=1, padx=10, pady=10)
-        popup_no_button.grid(column=1, row=1, padx=10, pady=10)
-        return
-    
-    
-    # Opens a popup prompting the user to select if a new ID should be assigned to the device.
-    def write_new_id_window(self):
-        write_new_id_popup = Toplevel(padx=20, pady=20)
-        write_new_id_popup.protocol("WM_DELETE_WINDOW", self.disable_event)
-        
-        ## 1 == yes, 2 == no
-        def set_new_id():
-            self.write_new_id_var.set(1)
-            write_new_id_popup.destroy()
-            return
-    
-        def no_new_id():
-            self.write_new_id_var.set(2)
-            write_new_id_popup.destroy()
-            return
-        
-        write_new_id_popup.title("Write new ID?")
-        
-        no_id_msg = ttk.Label(write_new_id_popup, text="Device has not been assigned an ID.\nWould you like to assign one?")
-        no_id_msg.config(font=("TkFixedFont", 16))
-        popup_yes_button = ttk.Button(write_new_id_popup, text="YES", command=set_new_id)
-        popup_no_button = ttk.Button(write_new_id_popup, text="NO", command=no_new_id)
-        
-        no_id_msg.grid(column=0, row=0, columnspan=2)
-        popup_yes_button.grid(column=0, row=1, padx=10, pady=10)
-        popup_no_button.grid(column=1, row=1, padx=10, pady=10)
-        return
-    
-    
-    # Opens a pop-up prompting the user to scan the label on the next available enclosure
-    def scan_enclosure_label_barcode_window(self, retry: bool):
-        self.enclosure_label.set("")
-        scan_enclosure_label_barcode_popup = Toplevel(padx=20, pady=20)
-        scan_enclosure_label_barcode_popup.protocol("WM_DELETE_WINDOW", self.disable_event)
-        
-        scan_enclosure_label_barcode_popup.title("Scan enclosure label")
-        
-        if retry:
-            msg = "Device with this ID already exists on Coiote or Portal. Please try another label."
-        else:
-            msg = "Scan the label on the next available enclosure."
-            
-        ask_to_scan_msg = ttk.Label(scan_enclosure_label_barcode_popup, text=msg)
-        ask_to_scan_msg.config(font=("TkFixedFont", 16))
-        barcode_entry = ttk.Entry(scan_enclosure_label_barcode_popup, textvariable=self.enclosure_label)
-        
-        ask_to_scan_msg.grid(column=0, row=0, columnspan=2)
-        barcode_entry.grid(column=0, row=1, padx=10, pady=10)
-        
-        barcode_entry.focus()
-        
-        barcode_scanned = False
-        while not barcode_scanned:
-            scan_enclosure_label_barcode_popup.update()
-            if self.enclosure_label.get() != "":
-                time.sleep(0.3)
-                scan_enclosure_label_barcode_popup.update()
-                self.enclosure_label.get()
-                barcode_scanned = True
-                
-        scan_enclosure_label_barcode_popup.destroy()
     
 
-    # Opens a pop-up prompting the user to select if they would like to add a new device to the portals
-    def add_device_to_portal_window(self, id):
-        add_dev_to_portal_popup = Toplevel(padx=20, pady=20)
-        add_dev_to_portal_popup.protocol("WM_DELETE_WINDOW", self.disable_event)
-        
-        self.add_dev_to_portal_var.set(0)
-        
-        ## 1 == yes, 2 == no
-        def add_dev():
-            self.add_dev_to_portal_var.set(1)
-            add_dev_to_portal_popup.destroy()
-            return
     
-        def do_not_add_dev():
-            self.add_dev_to_portal_var.set(2)
-            add_dev_to_portal_popup.destroy()
-            return
-        
-        add_dev_to_portal_popup.title("Add to EXACT Portal?")
-        
-        add_dev_msg = ttk.Label(add_dev_to_portal_popup, text=f"ID {id} found.\nWould you like to add this device to the EXACT Portal?")
-        add_dev_msg.config(font=("TkFixedFont", 16))
-        popup_yes_button = ttk.Button(add_dev_to_portal_popup, text="YES", command=add_dev)
-        popup_no_button = ttk.Button(add_dev_to_portal_popup, text="NO", command=do_not_add_dev)
-        
-        add_dev_msg.grid(column=0, row=0, columnspan=2)
-        popup_yes_button.grid(column=0, row=1, padx=10, pady=10)
-        popup_no_button.grid(column=1, row=1, padx=10, pady=10)
-        return
-    
-    
-    # Opens a window asking if the user would like to overwrite a device on portal with a new device ID
-    def overwrite_device_on_portal_window(self, hw_id, id):
-        overwrite_device_popup = Toplevel(padx=20, pady=20)
-        overwrite_device_popup.protocol("WM_DELETE_WINDOW", self.disable_event)
-        
-        self.overwrite_device_var.set(0)
 
-        ## 1 == yes, 2 == no
-        def overwrite_device():
-            self.overwrite_device_var.set(1)
-            overwrite_device_popup.destroy()
-            return
     
-        def do_not_overwrite_device():
-            self.overwrite_device_var.set(2)
-            overwrite_device_popup.destroy()
-            return
-        
-        overwrite_device_popup.title("Overwrite Device?")
-        
-        overwrite_msg = ttk.Label(overwrite_device_popup, text=f"Device urn:dev:mac:{hw_id} already exists on the\n"+
-                                  "EXACT Portal and Coiote with a different Device ID.\n"+
-                                  f"Would you like to overwrite this device with Device ID {id}?\n"+
-                                  "NOTE: THE DEVICE ID MUST BE MANUALLY\n"+
-                                  "REASSIGNED ON THE EXACT PORTAL.")
-        
-        overwrite_msg.config(font=("TkFixedFont", 16))
-        popup_yes_button = ttk.Button(overwrite_device_popup, text="YES", command=overwrite_device)
-        popup_no_button = ttk.Button(overwrite_device_popup, text="NO", command=do_not_overwrite_device)
-        
-        overwrite_msg.grid(column=0, row=0, columnspan=2)
-        popup_yes_button.grid(column=0, row=1, padx=10, pady=10)
-        popup_no_button.grid(column=1, row=1, padx=10, pady=10)
-        return
+
     
-    # Opens a pop-up prompting the user to select if they would like to add an existing device to the portals
-    def add_preassigned_device_to_portal_window(self, id):
-        add_dev_to_portal_popup = Toplevel(padx=20, pady=20)
-        add_dev_to_portal_popup.protocol("WM_DELETE_WINDOW", self.disable_event)
-        
-        self.add_dev_to_portal_var.set(0)
-        
-        ## 1 == yes, 2 == no
-        def add_dev():
-            self.add_dev_to_portal_var.set(1)
-            add_dev_to_portal_popup.destroy()
-            return
-    
-        def do_not_add_dev():
-            self.add_dev_to_portal_var.set(2)
-            add_dev_to_portal_popup.destroy()
-            return
-        
-        add_dev_to_portal_popup.title("Add to EXACT Portal?")
-        
-        add_dev_msg = ttk.Label(add_dev_to_portal_popup, text=f"ID {id} already assigned to board but does not exist\n"+
-                                "on EXACT Portal or Coiote. Would you like to add this device?")
-        add_dev_msg.config(font=("TkFixedFont", 16))
-        popup_yes_button = ttk.Button(add_dev_to_portal_popup, text="YES", command=add_dev)
-        popup_no_button = ttk.Button(add_dev_to_portal_popup, text="NO", command=do_not_add_dev)
-        
-        add_dev_msg.grid(column=0, row=0, columnspan=2)
-        popup_yes_button.grid(column=0, row=1, padx=10, pady=10)
-        popup_no_button.grid(column=1, row=1, padx=10, pady=10)
-        return
-    
-    
-    # Opens a window asking the user if they would like to print a label
-    def ask_to_print_label_window(self):
-        ask_to_print_label_popup = Toplevel(padx=20, pady=20)
-        ask_to_print_label_popup.protocol("WM_DELETE_WINDOW", self.disable_event)
-        
-        ## 1 == yes, 2 == no
-        def set_new_id():
-            self.print_label_var.set(1)
-            ask_to_print_label_popup.destroy()
-            return
-    
-        def no_new_id():
-            self.print_label_var.set(2)
-            ask_to_print_label_popup.destroy()
-            return
-        
-        ask_to_print_label_popup.title("Print Label?")
-        
-        print_label_msg = ttk.Label(ask_to_print_label_popup, text="Device failed test. Would you like to print a label?")
-        print_label_msg.config(font=("TkFixedFont", 16))
-        popup_yes_button = ttk.Button(ask_to_print_label_popup, text="YES", command=set_new_id)
-        popup_no_button = ttk.Button(ask_to_print_label_popup, text="NO", command=no_new_id)
-        
-        print_label_msg.grid(column=0, row=0, columnspan=2)
-        popup_yes_button.grid(column=0, row=1, padx=10, pady=10)
-        popup_no_button.grid(column=1, row=1, padx=10, pady=10)
-        return
-    
+
     
     # Opens a window notifying the user that a test is complete
     def test_complete_window(self):
@@ -656,35 +383,7 @@ class App(Tk):
         test_complete_msg.grid(column=0, row=0, columnspan=2)
         popup_ok_button.grid(column=0, row=1, padx=10, pady=10)
         return
-    
-    
-    # Opens a pop-up notifying the user the printer was not correctly plugged in and prompts to try again
-    def failed_print_window(self):
-        failed_print_popup = Toplevel(padx=20, pady=20)
-        failed_print_popup.protocol("WM_DELETE_WINDOW", self.disable_event)
-        
-        ## 1 == yes, 2 == no
-        def retry_print():
-            self.print_again_var.set(1)
-            failed_print_popup.destroy()
-            return
-    
-        def skip_print():
-            self.print_again_var.set(2)
-            failed_print_popup.destroy()
-            return
-        
-        failed_print_popup.title("Add to EXACT Portal?")
-        
-        print_failed_msg = ttk.Label(failed_print_popup, text="Print failed. Confirm the printer is powered on.\nWould you like to try again?")
-        print_failed_msg.config(font=("TkFixedFont", 16))
-        popup_yes_button = ttk.Button(failed_print_popup, text="YES", command=retry_print)
-        popup_no_button = ttk.Button(failed_print_popup, text="NO", command=skip_print)
-        
-        print_failed_msg.grid(column=0, row=0, columnspan=2)
-        popup_yes_button.grid(column=0, row=1, padx=10, pady=10)
-        popup_no_button.grid(column=1, row=1, padx=10, pady=10)
-        return
+
     
     # Opens a popup instructing the operator to restart the fixture application
     def restart_fixture_window(self):
@@ -929,8 +628,6 @@ class App(Tk):
         
         self.ble_retry_var.set(0)
         self.wait_variable(self.ble_retry_var)
-
-
 
 if __name__ == "__main__":
     gui = App()
