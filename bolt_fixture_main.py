@@ -125,7 +125,7 @@ tests_template: Dict[str, Any] = {
 measurements_template: Dict[str, Any] = {
     "bolt_id": "",
     "pcba_qr": "",
-    "HW_ID": "N/A",  # Not used in Bolt, set to N/A for printer compatibility
+    "HW_ID": "N/A",  # Scanned from the board's hardware ID label; 'N/A' if skipped
     "dev_ID": "",
     "PCBA_ID": "",
     "ble_rssi_median": None,
@@ -1258,6 +1258,26 @@ def prompt_for_bolt_qr(app: gui.App) -> str:
     return qr_payload
 
 
+def prompt_for_hw_id(app: gui.App) -> str:
+    """
+    Prompt the operator to scan the hardware ID label on the board and return
+    just the number from the scanned QR/barcode payload.
+
+    Mirrors the Bolt QR flow: the sticker may encode a URL (e.g.
+    https://exacttechnology.com/qr/d-12345), so the numeric portion is
+    extracted the same way as the Bolt ID. Shown before the Bolt QR scan. The
+    operator may SKIP, in which case an empty string is returned and the HW ID
+    column falls back to 'N/A'.
+    """
+    app.scan_hw_id_window()
+    raw = app.get_hw_id_barcode()
+    if not raw:
+        return ""
+    hw_id = bolt_control.parse_bolt_id_from_qr(raw) or raw.strip()
+    print(f"Scanned hardware ID: {hw_id}")
+    return hw_id
+
+
 def _update_pending_state(test: BoltTest) -> None:
     """Persist or clear resumable state for this board.
 
@@ -1301,6 +1321,11 @@ def run_bolt_test(app: gui.App, skip_cal: bool = False, sg: bool = False) -> Bol
         test._capture_baseline_ports()
 
         test.measurements["test_ID"] = int(start_time)
+        # Scan the hardware ID label on the board first. Recorded as HW ID in
+        # the CSV; operator may SKIP, leaving the default 'N/A'.
+        hw_id = prompt_for_hw_id(app)
+        if hw_id:
+            test.measurements["HW_ID"] = hw_id
         # Indicator 1: scan Bolt QR and parse Bolt ID from it.
         qr_payload = prompt_for_bolt_qr(app)
         if not qr_payload:

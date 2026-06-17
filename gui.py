@@ -12,6 +12,8 @@ class App(Tk):
         super().__init__()
         
         self.pcba_barcode = StringVar()
+        self.hw_id_barcode = StringVar()
+        self.hw_id_scan_var = IntVar()
         self.acknowledge_info_var = IntVar()
         self.test_complete_var = IntVar()
         self.pcba_barcode_scan_var = IntVar()
@@ -95,6 +97,9 @@ class App(Tk):
         
     def get_pcba_barcode(self):
         return self.pcba_barcode.get()
+
+    def get_hw_id_barcode(self):
+        return self.hw_id_barcode.get()
     
     # Creates a coloured circle in the specified grid location
     def __create_circle(self, column, row, color):
@@ -242,6 +247,50 @@ class App(Tk):
         self.update_idletasks()
 
     
+    # Opens a pop-up prompting the user to scan the hardware ID label on the board.
+    # Shown before the Bolt QR scan; the scanned value is recorded as HW ID in the CSV.
+    def scan_hw_id_window(self):
+        self.hw_id_barcode.set(value="")
+        self.hw_id_scan_var.set(0)
+        scan_confirm_var = IntVar(value=0)
+        scan_hw_id_popup = Toplevel(padx=20, pady=20)
+        scan_hw_id_popup.protocol("WM_DELETE_WINDOW", self.disable_event)
+
+        def confirm_hw_id():
+            raw = self.hw_id_barcode.get().strip()
+            if raw:
+                self.hw_id_barcode.set(raw)
+                scan_confirm_var.set(1)
+                scan_hw_id_popup.destroy()
+
+        def skip_hw_id_scan():
+            self.hw_id_scan_var.set(1)
+            self.hw_id_barcode.set(value="")
+            scan_confirm_var.set(2)
+            scan_hw_id_popup.destroy()
+
+        scan_hw_id_popup.title("Hardware ID Scan")
+
+        msg_str = "Please scan the hardware ID label on the board, or type manually, then click OK"
+
+        ask_to_scan_msg = ttk.Label(scan_hw_id_popup, text=msg_str)
+        ask_to_scan_msg.config(font=("TkFixedFont", 16))
+        hw_id_entry = ttk.Entry(scan_hw_id_popup, textvariable=self.hw_id_barcode)
+        ok_button = ttk.Button(scan_hw_id_popup, text="OK", command=confirm_hw_id)
+        skip_button = ttk.Button(scan_hw_id_popup, text="SKIP", command=skip_hw_id_scan)
+
+        hw_id_entry.bind("<Return>", lambda e: confirm_hw_id())
+
+        ask_to_scan_msg.grid(column=0, row=0, columnspan=2)
+        hw_id_entry.grid(column=0, row=1, columnspan=2, padx=10, pady=10)
+        ok_button.grid(column=0, row=2, padx=10, pady=10)
+        skip_button.grid(column=1, row=2, padx=10, pady=10)
+
+        hw_id_entry.focus()
+
+        self.wait_variable(scan_confirm_var)
+        return
+
     # Opens a pop-up prompting the user to scan the Bolt QR / PCBA barcode
     def scan_pcba_barcode_window(self):
         self.pcba_barcode.set(value="")

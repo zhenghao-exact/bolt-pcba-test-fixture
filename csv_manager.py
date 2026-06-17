@@ -45,7 +45,7 @@ def assemble_row(results: dict, measurements: dict, user: str, fixture: int):
     csv_row.append("N/A")  # Work Order
     csv_row.append(measurements.get("PCBA_ID", "N/A"))  # PCBA ID
     csv_row.append(measurements.get("dev_ID", ""))  # Device ID
-    csv_row.append("N/A")  # HW ID
+    csv_row.append(measurements.get("HW_ID", "N/A"))  # HW ID (scanned from board label)
     
     # IMU Test
     csv_row.append(results.get("imu", False))
