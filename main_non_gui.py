@@ -108,7 +108,7 @@ tests_template: Dict[str, Any] = {
 measurements_template: Dict[str, Any] = {
     "bolt_id": "",
     "pcba_qr": "",
-    "HW_ID": "N/A",  # Not used in Bolt, set to N/A for printer compatibility
+    "HW_ID": "N/A",  # Scanned from the board's hardware ID label; 'N/A' if skipped
     "dev_ID": "",
     "PCBA_ID": "",
     "ble_rssi_median": None,
@@ -544,6 +544,7 @@ class BoltTest:
         self.measurements["PCBA_ID"] = qr_payload
         self.measurements["dev_ID"] = bolt_id
         self.tests["qr_scan"] = True
+        print(f"Parsed Bolt ID: {bolt_id} (from QR: {qr_payload})")
         return True
 
     def program_serial_on_dut(self) -> bool:
@@ -1243,6 +1244,7 @@ class ConsoleUI:
     def __init__(self) -> None:
         self.should_exit = False
         self._pcba_barcode = ""
+        self._hw_id_barcode = ""
 
     # --- helpers ---------------------------------------------------------
 
@@ -1282,6 +1284,16 @@ class ConsoleUI:
 
     def get_pcba_barcode(self) -> str:
         return self._pcba_barcode
+
+    def scan_hw_id_window(self) -> None:
+        raw = input(
+            "Scan the hardware ID label on the board (or type manually), "
+            "ENTER blank to SKIP: "
+        ).strip()
+        self._hw_id_barcode = raw
+
+    def get_hw_id_barcode(self) -> str:
+        return self._hw_id_barcode
 
     # --- progress (cosmetic in the GUI) ----------------------------------
 
@@ -1371,6 +1383,31 @@ def prompt_for_bolt_qr(ui: ConsoleUI) -> str:
     return qr_payload
 
 
+def prompt_for_hw_id(ui: ConsoleUI) -> str:
+    """
+    Prompt the operator to scan the hardware ID label on the board and return
+    the scanned value verbatim.
+
+    Mirrors bolt_fixture_main.prompt_for_hw_id: the hardware ID is a structured
+    string (e.g. '03-002-0000124'), not a Bolt QR URL, so it is recorded exactly
+    as scanned — only a leading 'd-' URL form is unwrapped, to stay tolerant of
+    mistakenly scanning a Bolt sticker. Shown before the Bolt QR scan. The
+    operator may SKIP (blank input), in which case an empty string is returned
+    and the HW ID column falls back to 'N/A'.
+    """
+    ui.scan_hw_id_window()
+    raw = ui.get_hw_id_barcode()
+    if not raw:
+        return ""
+    raw = raw.strip()
+    # Only unwrap an actual QR URL (…/qr/d-12345); otherwise keep the full
+    # hardware ID, including any '03-002-' style prefix.
+    url_match = re.search(r"d-(\d+)", raw)
+    hw_id = url_match.group(1) if url_match else raw
+    print(f"Scanned hardware ID: {hw_id}")
+    return hw_id
+
+
 def gate(step_label: str) -> bool:
     """Before each test, ask the operator to RUN or SKIP it.
 
@@ -1421,6 +1458,12 @@ def run_bolt_test(ui: ConsoleUI, skip_cal: bool = False, sg: bool = False) -> Bo
         test._capture_baseline_ports()
 
         test.measurements["test_ID"] = int(start_time)
+
+        # Scan the hardware ID label on the board first. Recorded as HW ID in
+        # the CSV; operator may SKIP (blank input), leaving the default 'N/A'.
+        hw_id = prompt_for_hw_id(ui)
+        if hw_id:
+            test.measurements["HW_ID"] = hw_id
 
         # Step 1: scan Bolt QR and parse Bolt ID from it.
         if not gate("Step 1: Scan Bolt QR"):
