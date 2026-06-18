@@ -1261,19 +1261,23 @@ def prompt_for_bolt_qr(app: gui.App) -> str:
 def prompt_for_hw_id(app: gui.App) -> str:
     """
     Prompt the operator to scan the hardware ID label on the board and return
-    just the number from the scanned QR/barcode payload.
+    the scanned value verbatim.
 
-    Mirrors the Bolt QR flow: the sticker may encode a URL (e.g.
-    https://exacttechnology.com/qr/d-12345), so the numeric portion is
-    extracted the same way as the Bolt ID. Shown before the Bolt QR scan. The
-    operator may SKIP, in which case an empty string is returned and the HW ID
-    column falls back to 'N/A'.
+    The hardware ID is a structured string (e.g. '03-002-0000124'), not a Bolt
+    QR URL, so it is recorded exactly as scanned — only a leading 'd-' URL form
+    is unwrapped, to stay tolerant of mistakenly scanning a Bolt sticker. Shown
+    before the Bolt QR scan. The operator may SKIP, in which case an empty
+    string is returned and the HW ID column falls back to 'N/A'.
     """
     app.scan_hw_id_window()
     raw = app.get_hw_id_barcode()
     if not raw:
         return ""
-    hw_id = bolt_control.parse_bolt_id_from_qr(raw) or raw.strip()
+    raw = raw.strip()
+    # Only unwrap an actual QR URL (…/qr/d-12345); otherwise keep the full
+    # hardware ID, including any '03-002-' style prefix.
+    url_match = re.search(r"d-(\d+)", raw)
+    hw_id = url_match.group(1) if url_match else raw
     print(f"Scanned hardware ID: {hw_id}")
     return hw_id
 
