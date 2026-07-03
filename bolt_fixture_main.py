@@ -90,6 +90,7 @@ import gui  # Reused GUI from etc-monitor-fixture
 import nrfjprog
 import ppk2
 import printer_manager
+import fw_keyhash
 import csv_manager
 import upload_results
 import pending_tests
@@ -113,6 +114,12 @@ FW_FOLDER_PATH = "/home/boltfixturepi/bolt-pcba-test-fixture/fw"
 TEST_FW_FILENAME = "bolt-remake-test-fw.hex"
 PRODUCTION_FW_FILENAME = "bolt-remake-prod-fw.hex"
 SG_PRODUCTION_FW_FILENAME = "bolt-sg-prod-fw.hex"
+
+# Expected MCUboot signing-key hash (SHA256 of the signing pubkey) for the
+# custom production key (FW-1049). The staged production image is verified
+# against this before flashing. The in-repo default/insecure key hashes to
+# FC5701DC6135E1323847BDC40F04D2E5BEE5833B23C29F93593D00018CFA9994.
+EXPECTED_MCUBOOT_KEYHASH = "348092B80AD131DF294AC7755B45FF5010570C26657FD7E53EA58AEB6B2FF4B6"
 
 # CSV cell value recorded for tests skipped in strain-gauge (--SG) mode. Truthy
 # on purpose so evaluate_overall_result() treats the skipped tests as passing.
@@ -522,6 +529,22 @@ class BoltTest:
     def flash_production_firmware(self, sg: bool = False) -> bool:
         fw_filename = SG_PRODUCTION_FW_FILENAME if sg else PRODUCTION_FW_FILENAME
         fw_path = os.path.join(FW_FOLDER_PATH, fw_filename)
+        # FW-1049: remake production images must be signed with the custom
+        # MCUboot key. Verify the staged hex before flashing so a mis-staged
+        # default-key image fails here instead of shipping a board that cannot
+        # accept the fleet's key-matched OTA. SG is a separate default-key flow,
+        # so it is not key-checked here.
+        if not sg:
+            ok, keyhash = fw_keyhash.verify_hex_keyhash(fw_path, EXPECTED_MCUBOOT_KEYHASH)
+            if not ok:
+                print(
+                    f"Production flash ABORTED: {fw_filename} signing-key hash "
+                    f"{keyhash} != expected custom key {EXPECTED_MCUBOOT_KEYHASH}. "
+                    f"Stage the bolt-remake (custom-key) build under this name."
+                )
+                self.tests["flash_production_fw"] = False
+                self.failure = True
+                return False
         try:
             ppk2.set_to_source_mode()
             ppk2.toggle_DUT_power_ON()
