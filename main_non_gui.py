@@ -81,11 +81,20 @@ import bolt_control
 from serial import SerialException  # type: ignore[import-not-found]
 
 
-# Paths to firmware images on the Pi. Adjust these to match the Bolt build
-# output and repository layout on the production fixture.
+# Firmware images on the Pi. As of FW-1049/FW-1054 every board through this
+# fixture is a reworked ("remake") 1.3.0 board, so both images below are the
+# REMAKE builds signed with the CUSTOM MCUboot key. The production flash writes
+# the full merged.hex (bootloader included), so this fixture is where the
+# custom-key bootloader is baked in — staging a default-key / non-remake hex
+# here ships a board that cannot accept the fleet's key-matched OTA images.
+# Stage the current CI builds under these names (see PURPOSE.md):
+#   TEST_FW_FILENAME       <- CI bolt-poc-remake merged.hex (PoC = Zephyr shell)
+#   PRODUCTION_FW_FILENAME <- CI bolt-remake     merged.hex (custom key)
+# Strain-gauge boards are a SEPARATE flash-and-verify flow (--SG); their
+# firmware comes from the separate SG pipeline (default key, no remake).
 FW_FOLDER_PATH = "/home/boltfixturepi/bolt-pcba-test-fixture/fw"
-TEST_FW_FILENAME = "bolt-test-fw-060rc.hex"
-PRODUCTION_FW_FILENAME = "bolt-prod-fw-060rc.hex"
+TEST_FW_FILENAME = "bolt-remake-test-fw.hex"
+PRODUCTION_FW_FILENAME = "bolt-remake-prod-fw.hex"
 SG_PRODUCTION_FW_FILENAME = "bolt-sg-prod-fw.hex"
 
 # CSV cell value recorded for tests skipped in strain-gauge (--SG) mode. Truthy
