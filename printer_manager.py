@@ -1,11 +1,12 @@
 import brother_ql
 from brother_ql.conversion import convert
-from brother_ql.backends.helpers import send
 from PIL import Image, ImageDraw, ImageFont
 import qrcode
 import os
 import subprocess
 import time
+
+import printer_send  # local printer, or fall back to another Pi over SSH
 
 # Pillow 10+ removed ANTIALIAS/BILINEAR/BICUBIC; provide compatibility for brother_ql
 try:
@@ -98,13 +99,7 @@ def print_label(success, measurements, refurb, work_order) -> bool:
         cut=True
     )
     
-    try:
-        send(instructions=instructions, printer_identifier=printer, backend_identifier='linux_kernel', blocking=True)
-        return True
-    except Exception as exc:
-        print(f"Could not communicate with printer: {exc}")
-        print("Is it plugged in and turned on?")
-        return False
+    return printer_send.send_label(instructions)
     
 if __name__ == "__main__":
     import os
