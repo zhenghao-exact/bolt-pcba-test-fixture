@@ -47,6 +47,24 @@ def _print_label_best_effort(final_ok: bool, measurements: Dict[str, Any]) -> No
         )
 
 
+def _register_on_portal_best_effort(serial: str) -> None:
+    """Register the Bolt on the EXACT Portal without ever blocking or failing the test.
+
+    Like label printing, Portal registration is a best-effort production side effect:
+    a network outage or API error must never fail the board or halt the flow. The
+    call is idempotent, so re-testing an already-registered board just logs "already
+    registered". All errors are caught and logged only.
+    """
+    try:
+        ok, message = portal_registration.ensure_bolt_on_portal(serial)
+        if ok:
+            print(f"Portal registration: {message}")
+        else:
+            print(f"Portal registration failed (non-fatal): {message}")
+    except Exception as exc:
+        print(f"Portal registration error (non-fatal): {exc}")
+
+
 # Always-on stdout tee. Mirrors every print() to log/app_<timestamp>.log so the
 # full startup transcript — including ppk2.py's import-time PPK2 discovery —
 # is preserved for postmortem analysis. Installed before any module that
@@ -94,6 +112,7 @@ import fw_keyhash
 import csv_manager
 import upload_results
 import pending_tests
+import portal_registration
 
 import bolt_control
 from serial import SerialException  # type: ignore[import-not-found]
@@ -1739,6 +1758,14 @@ def run_bolt_test(app: gui.App, skip_cal: bool = False, sg: bool = False) -> Bol
         # must never block the flow or mark the board as failed; labels can be
         # reprinted afterwards.
         _print_label_best_effort(final_ok, test.measurements)
+
+        # Register the Bolt temperature sensor on the EXACT Portal (MBS) so its
+        # readings are visible without a manual step. Only passing, non-SG boards:
+        # SG (strain-gauge) boards are a different device (registering one as a
+        # type=26 temperature Bolt would be wrong). Best-effort — never blocks/fails.
+        bolt_id = test.measurements.get("bolt_id")
+        if final_ok and not sg and bolt_id not in (None, "", "N/A"):
+            _register_on_portal_best_effort(bolt_id)
 
         # Write test results to CSV – always execute, even on failure
         try:
